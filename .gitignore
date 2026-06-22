@@ -33,4 +33,5 @@ witness/
 # Vendored harness runtime state
 .contract_id
 .identity_contract_id
+.auspex_contract_id
 .superpowers/
