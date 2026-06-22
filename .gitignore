@@ -1,0 +1,29 @@
+# Secrets — never commit (see ~/Documents/secret/.env)
+.env
+.env.*
+*.pem
+*.key
+secret*.json
+
+# Node / web
+node_modules/
+.next/
+out/
+dist/
+*.tsbuildinfo
+.vercel/
+
+# Rust / Soroban
+target/
+**/target/
+
+# Noir / Barretenberg
+circuits/**/target/
+*.gz
+proofs/
+witness/
+
+# Local working artifacts
+*.log
+.DS_Store
+.remember/
