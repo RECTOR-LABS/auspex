@@ -1,6 +1,6 @@
 // circuits/solvency/src/main.nr
-global N: u32 = 8;   // positions (raise to 64 after the circuit is green)
-global K: u32 = 4;   // counterparties (raise to 16 after green)
+global N: u32 = 64;   // positions
+global K: u32 = 16;   // counterparties
 
 fn compute_commitment(
     amounts: [u64; N],
@@ -34,6 +34,15 @@ fn main(
     max_concentration_bps: pub u32,
     min_liquidity_bps: pub u32,
 ) {
+    for i in 0..N {
+        assert((active[i] as u64) <= 1, "active must be boolean");
+        assert((is_liquid[i] as u64) <= 1, "is_liquid must be boolean");
+        assert((counterparty_ids[i] as u32) < K, "counterparty id out of range");
+    }
+    assert((buffer_bps as u64) >= 10000, "buffer must be at least 100 percent");
+    assert((max_concentration_bps as u64) <= 10000, "concentration must be at most 100 percent");
+    assert((min_liquidity_bps as u64) <= 10000, "liquidity must be at most 100 percent");
+
     let mut total_assets: u128 = 0;
     let mut liquid_assets: u128 = 0;
     for i in 0..N {
@@ -71,13 +80,35 @@ fn main(
     );
 }
 
+#[test(should_fail_with = "counterparty id")]
+fn test_bad_counterparty_id_fails() {
+    let mut amounts: [u64; N] = [0; N];
+    amounts[0] = 1000;
+    let mut counterparty_ids: [u8; N] = [0; N];
+    counterparty_ids[0] = 99; // >= K, out of range
+    let mut is_liquid: [u8; N] = [0; N];
+    is_liquid[0] = 1;
+    let mut active: [u8; N] = [0; N];
+    active[0] = 1;
+    let liabilities: u64 = 100;
+    let salt: Field = 3;
+    let c = compute_commitment(amounts, counterparty_ids, is_liquid, active, liabilities, salt);
+    main(amounts, counterparty_ids, is_liquid, active, liabilities, salt, c, 10500, 10000, 10000);
+}
+
 #[test(should_fail_with = "liquidity")]
 fn test_illiquid_fails() {
     // 1000 total, only 100 liquid -> 10% liquid, policy requires 30%
-    let amounts: [u64; N] = [100, 900, 0, 0, 0, 0, 0, 0];
-    let counterparty_ids: [u8; N] = [0, 1, 0, 0, 0, 0, 0, 0];
-    let is_liquid: [u8; N] = [1, 0, 0, 0, 0, 0, 0, 0];
-    let active: [u8; N] = [1, 1, 0, 0, 0, 0, 0, 0];
+    let mut amounts: [u64; N] = [0; N];
+    amounts[0] = 100;
+    amounts[1] = 900;
+    let mut counterparty_ids: [u8; N] = [0; N];
+    counterparty_ids[1] = 1;
+    let mut is_liquid: [u8; N] = [0; N];
+    is_liquid[0] = 1;
+    let mut active: [u8; N] = [0; N];
+    active[0] = 1;
+    active[1] = 1;
     let liabilities: u64 = 100;
     let salt: Field = 9;
     let c = compute_commitment(amounts, counterparty_ids, is_liquid, active, liabilities, salt);
@@ -87,10 +118,13 @@ fn test_illiquid_fails() {
 
 #[test]
 fn test_solvent_passes() {
-    let amounts: [u64; N] = [1000, 0, 0, 0, 0, 0, 0, 0];
-    let counterparty_ids: [u8; N] = [0, 0, 0, 0, 0, 0, 0, 0];
-    let is_liquid: [u8; N] = [1, 0, 0, 0, 0, 0, 0, 0];
-    let active: [u8; N] = [1, 0, 0, 0, 0, 0, 0, 0];
+    let mut amounts: [u64; N] = [0; N];
+    amounts[0] = 1000;
+    let mut counterparty_ids: [u8; N] = [0; N];
+    let mut is_liquid: [u8; N] = [0; N];
+    is_liquid[0] = 1;
+    let mut active: [u8; N] = [0; N];
+    active[0] = 1;
     let liabilities: u64 = 900;
     let salt: Field = 42;
     let c = compute_commitment(amounts, counterparty_ids, is_liquid, active, liabilities, salt);
@@ -100,10 +134,13 @@ fn test_solvent_passes() {
 
 #[test(should_fail_with = "insolvent")]
 fn test_insolvent_fails() {
-    let amounts: [u64; N] = [1000, 0, 0, 0, 0, 0, 0, 0];
-    let counterparty_ids: [u8; N] = [0, 0, 0, 0, 0, 0, 0, 0];
-    let is_liquid: [u8; N] = [1, 0, 0, 0, 0, 0, 0, 0];
-    let active: [u8; N] = [1, 0, 0, 0, 0, 0, 0, 0];
+    let mut amounts: [u64; N] = [0; N];
+    amounts[0] = 1000;
+    let mut counterparty_ids: [u8; N] = [0; N];
+    let mut is_liquid: [u8; N] = [0; N];
+    is_liquid[0] = 1;
+    let mut active: [u8; N] = [0; N];
+    active[0] = 1;
     let liabilities: u64 = 1000; // assets 1000 < 1000 * 1.05
     let salt: Field = 42;
     let c = compute_commitment(amounts, counterparty_ids, is_liquid, active, liabilities, salt);
@@ -113,10 +150,18 @@ fn test_insolvent_fails() {
 #[test(should_fail_with = "concentration")]
 fn test_over_concentrated_fails() {
     // 800 with counterparty 1, 200 with counterparty 2 -> 80% in one cp
-    let amounts: [u64; N] = [800, 200, 0, 0, 0, 0, 0, 0];
-    let counterparty_ids: [u8; N] = [1, 2, 0, 0, 0, 0, 0, 0];
-    let is_liquid: [u8; N] = [1, 1, 0, 0, 0, 0, 0, 0];
-    let active: [u8; N] = [1, 1, 0, 0, 0, 0, 0, 0];
+    let mut amounts: [u64; N] = [0; N];
+    amounts[0] = 800;
+    amounts[1] = 200;
+    let mut counterparty_ids: [u8; N] = [0; N];
+    counterparty_ids[0] = 1;
+    counterparty_ids[1] = 2;
+    let mut is_liquid: [u8; N] = [0; N];
+    is_liquid[0] = 1;
+    is_liquid[1] = 1;
+    let mut active: [u8; N] = [0; N];
+    active[0] = 1;
+    active[1] = 1;
     let liabilities: u64 = 100;
     let salt: Field = 7;
     let c = compute_commitment(amounts, counterparty_ids, is_liquid, active, liabilities, salt);
