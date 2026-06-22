@@ -146,7 +146,7 @@ Goal: a Noir circuit that proves solvency + concentration + liquidity over a pri
 name = "solvency"
 type = "bin"
 authors = [""]
-compiler_version = ">=1.0.0-beta.9"
+compiler_version = ">=1.0.0"
 
 [dependencies]
 ```
