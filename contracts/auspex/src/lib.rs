@@ -137,6 +137,29 @@ impl AuspexContract {
             .publish((symbol_short!("attested"), issuer), id);
         Ok(id)
     }
+
+    /// The attestation at `id` for `issuer`, or None if absent.
+    pub fn get_attestation(env: Env, issuer: Address, id: u64) -> Option<Attestation> {
+        env.storage().persistent().get(&DataKey::Item(issuer, id))
+    }
+
+    /// Number of attestations recorded for `issuer` (0 if none).
+    pub fn count(env: Env, issuer: Address) -> u64 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Count(issuer))
+            .unwrap_or(0u64)
+    }
+
+    /// The most recent attestation for `issuer`, or None if there are none.
+    pub fn get_latest(env: Env, issuer: Address) -> Option<Attestation> {
+        let n = Self::count(env.clone(), issuer.clone());
+        if n == 0 {
+            None
+        } else {
+            Self::get_attestation(env, issuer, n - 1)
+        }
+    }
 }
 
 // =============================================================================

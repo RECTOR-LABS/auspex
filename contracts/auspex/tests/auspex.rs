@@ -41,6 +41,40 @@ fn attest_stores_attestation_for_valid_proof() {
 }
 
 #[test]
+fn read_methods_return_stored_attestation() {
+    let env = test_env();
+    env.mock_all_auths();
+    let f = Fixture::load("solvency");
+    let (proof, vk, pi) = f.into_bytes(&env);
+
+    let contract_id = env.register(AuspexContract, (vk.clone(),));
+    let client = AuspexContractClient::new(&env, &contract_id);
+    let issuer = Address::generate(&env);
+
+    // Before any attestation: count 0, no latest, no item.
+    assert_eq!(client.count(&issuer), 0);
+    assert!(client.get_latest(&issuer).is_none());
+    assert!(client.get_attestation(&issuer, &0).is_none());
+
+    let id = client.attest(&issuer, &proof, &pi);
+    assert_eq!(id, 0);
+
+    let got = client.get_attestation(&issuer, &id).unwrap();
+    assert_eq!(got.issuer, issuer);
+    assert_eq!(got.buffer_bps, 10500);
+    assert_eq!(got.max_concentration_bps, 5000);
+    assert_eq!(got.min_liquidity_bps, 3000);
+
+    let latest = client.get_latest(&issuer).unwrap();
+    assert_eq!(latest.ledger_seq, got.ledger_seq);
+    assert_eq!(latest.commitment, got.commitment);
+
+    assert_eq!(client.count(&issuer), 1);
+    // Out-of-range id -> None.
+    assert!(client.get_attestation(&issuer, &99).is_none());
+}
+
+#[test]
 fn attest_rejects_tampered_proof() {
     let env = test_env();
     env.mock_all_auths();
