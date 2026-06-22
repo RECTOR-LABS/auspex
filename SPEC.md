@@ -155,8 +155,9 @@ Let `TA = Σ active_i · amount_i` (total assets). All products widened to `u128
 2. **Concentration:** for each counterparty `j ∈ [0, K)`:
    `cp_sum_j = Σ active_i · amount_i · (counterparty_id_i == j)` and assert `cp_sum_j · 10000 ≤ TA · max_concentration_bps`
 3. **Liquidity:** `LA = Σ active_i · amount_i · is_liquid_i` and assert `LA · 10000 ≥ TA · min_liquidity_bps`
-4. **Commitment integrity:** `commitment == pedersen_hash(salt, liabilities, [amount_i, counterparty_id_i, is_liquid_i, active_i]_{i<N})` — `std::hash::pedersen_hash` is the stdlib-confirmed ZK-friendly hash for the pinned Noir version. (Stellar's native Poseidon host functions accelerate the on-chain *verifier*, not this in-circuit commitment.)
+4. **Commitment integrity:** `commitment == pedersen_hash([amount_i]_{i<N} ‖ [counterparty_id_i]_{i<N} ‖ [is_liquid_i]_{i<N} ‖ [active_i]_{i<N} ‖ liabilities ‖ salt)` — a flat `[Field; 4·N+2]` array in exactly that order: the four per-position arrays as contiguous blocks, then `liabilities`, then `salt` as the final element. `std::hash::pedersen_hash` is the stdlib-confirmed ZK-friendly hash for the pinned Noir version. (Stellar's native Poseidon host functions accelerate the on-chain *verifier*, not this in-circuit commitment.) **The CLI and any auditor must reproduce this exact layout** to recompute the commitment, or the equality assert fails.
 5. **Range / sanity:** each `amount_i < 2^64`; `counterparty_id_i < K`; `is_liquid_i, active_i ∈ {0,1}`.
+6. **Non-empty:** `TA > 0` — a book with no active assets cannot attest solvency (it would otherwise satisfy every ratio vacuously).
 
 ### 7.3 Bounds & overflow
 - `N = 64` positions, `K = 16` counterparties (compile-time constants; start small at `N=8, K=4` during the spike, scale up).
@@ -269,6 +270,8 @@ The glue between circuit and chain. Secrets via env only (never hardcoded; per p
 To be stated plainly in the README:
 - All balance-sheet data in the demo is **synthetic and labeled as such.**
 - Auspex proves that **the committed book satisfies the policy**, and binds the proof to that commitment. It does **not**, in v1, prove the committed book matches an institution's *real-world* custody. Tying the commitment to reality (signed custody feeds, MPC over bank/chain balances, oracle attestations) is **explicitly future work**, not claimed as done.
+- The proof attests the policy **ratios** over the committed book; it does not reveal magnitudes, so a deliberately small book can satisfy them. The circuit guards only the degenerate empty book (`TA > 0`); distinguishing "solvent and material" from "solvent but trivial" is out of v1 scope.
+- Commitment **hiding** depends on a high-entropy `salt` supplied by the prover (the CLI generates it with a CSPRNG); a predictable salt over a low-entropy book would weaken confidentiality.
 - v1 runs on **testnet**; no real funds.
 
 This honesty is a deliberate design choice — the hackathon explicitly rewards an honest work-in-progress over a "polished mystery."
@@ -279,13 +282,12 @@ This honesty is a deliberate design choice — the hackathon explicitly rewards 
 
 ```
 auspex/
-  circuits/                # Noir
-    src/main.nr
-    Nargo.toml
-  contracts/               # Soroban (Rust)
-    solvency-verifier/
-      src/lib.rs
-      Cargo.toml
+  circuits/
+    solvency/              # Noir circuit
+      src/main.nr
+      Nargo.toml
+      Prover.toml          # labeled synthetic witness
+  contracts/               # Soroban (Rust): vendored UltraHonk harness; attest crate = contracts/auspex (Phase 2)
   cli/                     # TypeScript CLI glue
   web/                     # Next.js app
   fixtures/                # synthetic books + policies (labeled)
