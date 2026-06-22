@@ -34,6 +34,48 @@ fn main(
     max_concentration_bps: pub u32,
     min_liquidity_bps: pub u32,
 ) {
-    // constraints added in Tasks 1.2-1.5
-    let _ = compute_commitment(amounts, counterparty_ids, is_liquid, active, liabilities, salt);
+    let mut total_assets: u128 = 0;
+    let mut liquid_assets: u128 = 0;
+    for i in 0..N {
+        let amt: u128 = (amounts[i] as u128) * (active[i] as u128);
+        total_assets += amt;
+        liquid_assets += amt * (is_liquid[i] as u128);
+    }
+
+    // 1. Solvency: total_assets * 10000 >= liabilities * buffer_bps
+    assert(
+        total_assets * 10000 >= (liabilities as u128) * (buffer_bps as u128),
+        "insolvent: assets below liabilities times buffer",
+    );
+
+    let computed = compute_commitment(amounts, counterparty_ids, is_liquid, active, liabilities, salt);
+    assert(computed == commitment, "commitment mismatch");
+
+    // placeholders for next tasks (concentration, liquidity) - replaced in 1.3/1.4
+    let _ = (liquid_assets, max_concentration_bps, min_liquidity_bps);
+}
+
+#[test]
+fn test_solvent_passes() {
+    let amounts: [u64; N] = [1000, 0, 0, 0, 0, 0, 0, 0];
+    let counterparty_ids: [u8; N] = [0, 0, 0, 0, 0, 0, 0, 0];
+    let is_liquid: [u8; N] = [1, 0, 0, 0, 0, 0, 0, 0];
+    let active: [u8; N] = [1, 0, 0, 0, 0, 0, 0, 0];
+    let liabilities: u64 = 900;
+    let salt: Field = 42;
+    let c = compute_commitment(amounts, counterparty_ids, is_liquid, active, liabilities, salt);
+    // buffer 105%, concentration 100%, liquidity 100%
+    main(amounts, counterparty_ids, is_liquid, active, liabilities, salt, c, 10500, 10000, 10000);
+}
+
+#[test(should_fail_with = "insolvent")]
+fn test_insolvent_fails() {
+    let amounts: [u64; N] = [1000, 0, 0, 0, 0, 0, 0, 0];
+    let counterparty_ids: [u8; N] = [0, 0, 0, 0, 0, 0, 0, 0];
+    let is_liquid: [u8; N] = [1, 0, 0, 0, 0, 0, 0, 0];
+    let active: [u8; N] = [1, 0, 0, 0, 0, 0, 0, 0];
+    let liabilities: u64 = 1000; // assets 1000 < 1000 * 1.05
+    let salt: Field = 42;
+    let c = compute_commitment(amounts, counterparty_ids, is_liquid, active, liabilities, salt);
+    main(amounts, counterparty_ids, is_liquid, active, liabilities, salt, c, 10500, 10000, 10000);
 }
