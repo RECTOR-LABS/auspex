@@ -51,8 +51,20 @@ fn main(
     let computed = compute_commitment(amounts, counterparty_ids, is_liquid, active, liabilities, salt);
     assert(computed == commitment, "commitment mismatch");
 
-    // placeholders for next tasks (concentration, liquidity) - replaced in 1.3/1.4
-    let _ = (liquid_assets, max_concentration_bps, min_liquidity_bps);
+    // 2. Concentration: for each counterparty, cp_sum * 10000 <= total_assets * max_concentration_bps
+    for j in 0..K {
+        let mut cp_sum: u128 = 0;
+        for i in 0..N {
+            let is_match: u128 = if (counterparty_ids[i] as u32) == j { 1 } else { 0 };
+            cp_sum += (amounts[i] as u128) * (active[i] as u128) * is_match;
+        }
+        assert(
+            cp_sum * 10000 <= total_assets * (max_concentration_bps as u128),
+            "concentration: counterparty exposure exceeds limit",
+        );
+    }
+
+    let _ = min_liquidity_bps; // replaced in Task 1.4
 }
 
 #[test]
@@ -78,4 +90,18 @@ fn test_insolvent_fails() {
     let salt: Field = 42;
     let c = compute_commitment(amounts, counterparty_ids, is_liquid, active, liabilities, salt);
     main(amounts, counterparty_ids, is_liquid, active, liabilities, salt, c, 10500, 10000, 10000);
+}
+
+#[test(should_fail_with = "concentration")]
+fn test_over_concentrated_fails() {
+    // 800 with counterparty 1, 200 with counterparty 2 -> 80% in one cp
+    let amounts: [u64; N] = [800, 200, 0, 0, 0, 0, 0, 0];
+    let counterparty_ids: [u8; N] = [1, 2, 0, 0, 0, 0, 0, 0];
+    let is_liquid: [u8; N] = [1, 1, 0, 0, 0, 0, 0, 0];
+    let active: [u8; N] = [1, 1, 0, 0, 0, 0, 0, 0];
+    let liabilities: u64 = 100;
+    let salt: Field = 7;
+    let c = compute_commitment(amounts, counterparty_ids, is_liquid, active, liabilities, salt);
+    // max concentration 20%
+    main(amounts, counterparty_ids, is_liquid, active, liabilities, salt, c, 10500, 2000, 10000);
 }
