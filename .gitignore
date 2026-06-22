@@ -27,3 +27,8 @@ witness/
 *.log
 .DS_Store
 .remember/
+
+# Vendored harness runtime state
+.contract_id
+.identity_contract_id
+.superpowers/
