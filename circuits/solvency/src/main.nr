@@ -64,7 +64,25 @@ fn main(
         );
     }
 
-    let _ = min_liquidity_bps; // replaced in Task 1.4
+    // 3. Liquidity: liquid_assets * 10000 >= total_assets * min_liquidity_bps
+    assert(
+        liquid_assets * 10000 >= total_assets * (min_liquidity_bps as u128),
+        "liquidity: liquid assets below minimum ratio",
+    );
+}
+
+#[test(should_fail_with = "liquidity")]
+fn test_illiquid_fails() {
+    // 1000 total, only 100 liquid -> 10% liquid, policy requires 30%
+    let amounts: [u64; N] = [100, 900, 0, 0, 0, 0, 0, 0];
+    let counterparty_ids: [u8; N] = [0, 1, 0, 0, 0, 0, 0, 0];
+    let is_liquid: [u8; N] = [1, 0, 0, 0, 0, 0, 0, 0];
+    let active: [u8; N] = [1, 1, 0, 0, 0, 0, 0, 0];
+    let liabilities: u64 = 100;
+    let salt: Field = 9;
+    let c = compute_commitment(amounts, counterparty_ids, is_liquid, active, liabilities, salt);
+    // min liquidity 30%
+    main(amounts, counterparty_ids, is_liquid, active, liabilities, salt, c, 10500, 10000, 3000);
 }
 
 #[test]
