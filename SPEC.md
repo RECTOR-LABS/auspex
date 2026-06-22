@@ -155,7 +155,7 @@ Let `TA = Σ active_i · amount_i` (total assets). All products widened to `u128
 2. **Concentration:** for each counterparty `j ∈ [0, K)`:
    `cp_sum_j = Σ active_i · amount_i · (counterparty_id_i == j)` and assert `cp_sum_j · 10000 ≤ TA · max_concentration_bps`
 3. **Liquidity:** `LA = Σ active_i · amount_i · is_liquid_i` and assert `LA · 10000 ≥ TA · min_liquidity_bps`
-4. **Commitment integrity:** `commitment == Poseidon(salt, liabilities, [amount_i, counterparty_id_i, is_liquid_i, active_i]_{i<N})`
+4. **Commitment integrity:** `commitment == pedersen_hash(salt, liabilities, [amount_i, counterparty_id_i, is_liquid_i, active_i]_{i<N})` — `std::hash::pedersen_hash` is the stdlib-confirmed ZK-friendly hash for the pinned Noir version. (Stellar's native Poseidon host functions accelerate the on-chain *verifier*, not this in-circuit commitment.)
 5. **Range / sanity:** each `amount_i < 2^64`; `counterparty_id_i < K`; `is_liquid_i, active_i ∈ {0,1}`.
 
 ### 7.3 Bounds & overflow
@@ -327,7 +327,8 @@ auspex/
 - **ZK proof** — a proof that a statement is true revealing nothing beyond its truth.
 - **Noir** — Rust-like DSL for ZK circuits; proven with Barretenberg (UltraHonk).
 - **Soroban** — Stellar's Rust smart-contract platform.
-- **Poseidon** — ZK-friendly hash, native on Stellar (Protocol 25); used for the commitment.
+- **Pedersen hash** — ZK-friendly hash in the Noir stdlib; used for the in-circuit commitment.
+- **Poseidon** — ZK-friendly hash with native Stellar host functions (Protocol 25); accelerates the on-chain proof verifier.
 - **BN254** — elliptic curve with native Stellar host functions for proof verification.
 - **Commitment** — a hash that binds the proof to the exact (hidden) balance sheet.
 - **View-key** *(stretch)* — a key letting one designated party reconstruct the book for one attestation.
