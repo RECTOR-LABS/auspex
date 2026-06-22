@@ -5,7 +5,8 @@ members = [
     "crates/test-utils",
     "contracts/rs-soroban-ultrahonk",
     "contracts/tornado_classic/contracts",
-    "contracts/identity"
+    "contracts/identity",
+    "contracts/auspex"
 ]
 
 [workspace.dependencies]
