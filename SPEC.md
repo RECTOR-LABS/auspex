@@ -142,7 +142,7 @@ The heart of the system. All arithmetic uses **integer minor units** (e.g. cents
 - `active: [bool; N]` — padding mask (real books are smaller than N)
 
 **Public:**
-- `commitment: Field` — Poseidon hash binding the entire witness
+- `commitment: Field` — Pedersen hash (`std::hash::pedersen_hash`) binding the entire witness
 - `buffer_bps: u32` — solvency buffer, ≥ 10000 (10000 = 100%)
 - `max_concentration_bps: u32` — ≤ 10000
 - `min_liquidity_bps: u32` — ≤ 10000
@@ -232,7 +232,7 @@ The glue between circuit and chain. Secrets via env only (never hardcoded; per p
 
 | v1 (must ship) | Stretch (only if time) |
 |---|---|
-| Noir circuit: 3 constraints + Poseidon commitment | In-browser WASM proving |
+| Noir circuit: 3 constraints + Pedersen commitment | In-browser WASM proving |
 | Soroban verifier on testnet | **Auditor view-key** (selective disclosure) |
 | E2E: book → proof → on-chain verify → stored attestation | Historical "solvency heartbeat" timeline |
 | CLI (`prove` / `publish` / `verify`) | Multiple policy templates |
