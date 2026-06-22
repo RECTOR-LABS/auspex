@@ -51,6 +51,10 @@ fn main(
         liquid_assets += amt * (is_liquid[i] as u128);
     }
 
+    // The book must have at least one active asset; an all-zero / empty book
+    // would otherwise satisfy every ratio vacuously (0 >= 0, 0 <= 0).
+    assert(total_assets > 0, "no active assets");
+
     // 1. Solvency: total_assets * 10000 >= liabilities * buffer_bps
     assert(
         total_assets * 10000 >= (liabilities as u128) * (buffer_bps as u128),
@@ -167,4 +171,48 @@ fn test_over_concentrated_fails() {
     let c = compute_commitment(amounts, counterparty_ids, is_liquid, active, liabilities, salt);
     // max concentration 20%
     main(amounts, counterparty_ids, is_liquid, active, liabilities, salt, c, 10500, 2000, 10000);
+}
+
+#[test(should_fail_with = "no active assets")]
+fn test_empty_book_fails() {
+    // No active positions -> total_assets == 0 -> cannot attest solvency.
+    let amounts: [u64; N] = [0; N];
+    let counterparty_ids: [u8; N] = [0; N];
+    let is_liquid: [u8; N] = [0; N];
+    let active: [u8; N] = [0; N];
+    let liabilities: u64 = 0;
+    let salt: Field = 5;
+    let c = compute_commitment(amounts, counterparty_ids, is_liquid, active, liabilities, salt);
+    main(amounts, counterparty_ids, is_liquid, active, liabilities, salt, c, 10500, 10000, 10000);
+}
+
+#[test(should_fail_with = "active must be boolean")]
+fn test_non_boolean_active_fails() {
+    let mut amounts: [u64; N] = [0; N];
+    amounts[0] = 1000;
+    let counterparty_ids: [u8; N] = [0; N];
+    let mut is_liquid: [u8; N] = [0; N];
+    is_liquid[0] = 1;
+    let mut active: [u8; N] = [0; N];
+    active[0] = 2; // not boolean -> must be rejected
+    let liabilities: u64 = 100;
+    let salt: Field = 6;
+    let c = compute_commitment(amounts, counterparty_ids, is_liquid, active, liabilities, salt);
+    main(amounts, counterparty_ids, is_liquid, active, liabilities, salt, c, 10500, 10000, 10000);
+}
+
+#[test(should_fail_with = "buffer must be at least")]
+fn test_buffer_below_one_hundred_percent_fails() {
+    let mut amounts: [u64; N] = [0; N];
+    amounts[0] = 1000;
+    let counterparty_ids: [u8; N] = [0; N];
+    let mut is_liquid: [u8; N] = [0; N];
+    is_liquid[0] = 1;
+    let mut active: [u8; N] = [0; N];
+    active[0] = 1;
+    let liabilities: u64 = 100;
+    let salt: Field = 8;
+    let c = compute_commitment(amounts, counterparty_ids, is_liquid, active, liabilities, salt);
+    // buffer 99.99% (< 10000) must be rejected
+    main(amounts, counterparty_ids, is_liquid, active, liabilities, salt, c, 9999, 10000, 10000);
 }
