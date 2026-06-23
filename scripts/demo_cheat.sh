@@ -8,6 +8,12 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
+# `prove` overwrites the (gitignored) solvency Prover.toml with the book it is
+# given — here the over-concentrated one — which would otherwise leave
+# `just build-circuits solvency` failing until reset. Restore the synthetic
+# default witness on exit so the demo never leaves the repo unbuildable.
+trap 'cp -f circuits/solvency/Prover.toml.example circuits/solvency/Prover.toml 2>/dev/null || true' EXIT
+
 if [ ! -f cli/dist/index.js ]; then
   echo "[demo] building the auspex CLI..."
   pnpm --dir cli install >/dev/null 2>&1 && pnpm --dir cli build >/dev/null 2>&1
