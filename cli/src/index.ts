@@ -8,7 +8,7 @@ import { fileURLToPath } from "url";
 import { Keypair } from "@stellar/stellar-sdk";
 import { Book, Policy } from "./types.js";
 import { buildWitnessArrays } from "./witness.js";
-import { publish } from "./chain.js";
+import { publish, readAttestation, formatAttestation, parseAttestationId } from "./chain.js";
 
 // Resolve the repo root relative to this compiled file's location.
 // dist/index.js -> ../.. = repo root (cli is one level up from src, repo root is one more up from cli).
@@ -196,8 +196,29 @@ program
   .description("Verify an on-chain attestation by issuer address")
   .requiredOption("--issuer <addr>", "Stellar address of the attesting issuer")
   .option("--id <n>", "specific attestation ID (defaults to latest)")
-  .action(async () => {
-    throw new Error("not implemented");
+  .option("--network <n>", "Stellar network to target", "testnet")
+  .action(async (opts: { issuer: string; id?: string; network: string }) => {
+    let id: number | undefined;
+    if (opts.id !== undefined) {
+      try { id = parseAttestationId(opts.id); }
+      catch (e) { console.error(`❌ ${(e as Error).message}`); process.exit(1); }
+    }
+    const idLabel = opts.id !== undefined ? opts.id : "latest";
+
+    console.log(`[auspex] querying attestation for issuer: ${opts.issuer}`);
+    console.log(`[auspex] network: ${opts.network}`);
+
+    const att = await readAttestation(opts.issuer, opts.network, id);
+
+    if (att === null) {
+      console.error(`❌ No attestation found for ${opts.issuer}`);
+      process.exit(1);
+    }
+
+    const lines = formatAttestation(att, { idLabel, network: opts.network });
+    for (const line of lines) {
+      console.log(line);
+    }
   });
 
 program.parseAsync();

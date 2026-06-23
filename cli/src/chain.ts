@@ -6,7 +6,9 @@ import {
   Contract,
   TransactionBuilder,
   Keypair,
+  Account,
   Address,
+  nativeToScVal,
   scValToNative,
   xdr,
 } from "@stellar/stellar-sdk";
@@ -44,6 +46,131 @@ function networkConfig(network: string): NetworkConfig {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Attestation read helpers
+// ---------------------------------------------------------------------------
+
+export interface Attestation {
+  issuer: string;
+  commitment: Buffer;
+  buffer_bps: number;
+  max_concentration_bps: number;
+  min_liquidity_bps: number;
+  ledger_timestamp: bigint;
+  ledger_seq: number;
+}
+
+/**
+ * Read the contract id from the repo root's .auspex_contract_id file.
+ * Kept as a tiny shared helper so publish and readAttestation stay DRY.
+ */
+function readContractId(): string {
+  return readFileSync(join(REPO_ROOT, ".auspex_contract_id"), "utf8").trim();
+}
+
+export interface FormatAttestationOpts {
+  /** "latest" when --id was not supplied, or the numeric id as a string. */
+  idLabel: string;
+  /** The network name, used to build the explorer URL ("testnet" | "local"). */
+  network: string;
+}
+
+/**
+ * Parse a raw --id string into a non-negative integer.
+ * Throws an actionable Error if the value is not a non-negative integer.
+ * Pure function — no I/O, fully unit-testable.
+ */
+export function parseAttestationId(raw: string): number {
+  const n = Number(raw);
+  if (raw.trim() === "" || !Number.isInteger(n) || n < 0) {
+    throw new Error(`--id must be a non-negative integer, got: ${raw}`);
+  }
+  return n;
+}
+
+/**
+ * Convert an Attestation struct into the array of human-readable lines that
+ * the `verify` command prints. Pure function — no I/O, easy to unit-test.
+ */
+export function formatAttestation(
+  att: Attestation,
+  opts: FormatAttestationOpts,
+): string[] {
+  const commitmentHex = Buffer.from(att.commitment).toString("hex");
+  const recordedAt = new Date(Number(att.ledger_timestamp) * 1000).toISOString();
+  const networkLabel = opts.network;
+  const explorerLink = `https://stellar.expert/explorer/${networkLabel}/account/${att.issuer}`;
+
+  return [
+    "✅ Attestation found",
+    "",
+    `  issuer:              ${att.issuer}`,
+    `  attestation id:      ${opts.idLabel}`,
+    "",
+    "  Policy proven:",
+    `    solvency buffer          >= ${att.buffer_bps} bps`,
+    `    max counterparty conc.   <= ${att.max_concentration_bps} bps`,
+    `    min liquid-asset ratio   >= ${att.min_liquidity_bps} bps`,
+    "",
+    `  commitment:          ${commitmentHex}`,
+    `  recorded at:         ledger ${att.ledger_seq}  (${recordedAt})`,
+    `  explorer:            ${explorerLink}`,
+  ];
+}
+
+/**
+ * Read an attestation from chain via read-only simulation — no signing,
+ * no secret required.
+ *
+ * @param issuer  - Stellar G-address of the attesting issuer.
+ * @param network - Stellar network to target ("testnet" | "local").
+ * @param id      - Optional specific attestation id; omit for latest.
+ * @returns       Decoded Attestation, or null if none exists for this issuer.
+ */
+export async function readAttestation(
+  issuer: string,
+  network: string,
+  id?: number,
+): Promise<Attestation | null> {
+  const { rpcUrl, passphrase, allowHttp } = networkConfig(network);
+  const contractId = readContractId();
+
+  const server = new rpc.Server(rpcUrl, { allowHttp });
+  const contract = new Contract(contractId);
+
+  const op =
+    id === undefined
+      ? contract.call("get_latest", new Address(issuer).toScVal())
+      : contract.call(
+          "get_attestation",
+          new Address(issuer).toScVal(),
+          nativeToScVal(BigInt(id), { type: "u64" }),
+        );
+
+  // dummy sequence — simulation never submits or checks it.
+  const source = new Account(issuer, "0");
+  const tx = new TransactionBuilder(source, {
+    fee: "100",
+    networkPassphrase: passphrase,
+  })
+    .addOperation(op)
+    .setTimeout(30)
+    .build();
+
+  const sim = await server.simulateTransaction(tx);
+  if (rpc.Api.isSimulationError(sim)) {
+    throw new Error(`read failed: ${sim.error}`);
+  }
+
+  const retval = sim.result?.retval;
+  if (!retval) return null;
+
+  const decoded = scValToNative(retval) as Attestation | null | undefined;
+  return decoded == null ? null : decoded;
+}
+
+// ---------------------------------------------------------------------------
+
 /**
  * Submit a ZK solvency proof as an on-chain attestation via the Soroban
  * attest contract. Reads raw proof and public_inputs bytes from proofDir,
@@ -68,10 +195,7 @@ export async function publish(
   // unit test never touches the network or the filesystem.
   const { rpcUrl, passphrase, allowHttp } = networkConfig(network);
 
-  const contractId = readFileSync(
-    join(REPO_ROOT, ".auspex_contract_id"),
-    "utf8",
-  ).trim();
+  const contractId = readContractId();
 
   const dir = resolve(process.cwd(), proofDir);
   const proof = readFileSync(join(dir, "proof"));
