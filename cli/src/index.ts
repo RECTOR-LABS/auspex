@@ -5,8 +5,10 @@ import { readFileSync, writeFileSync } from "fs";
 import { randomBytes } from "crypto";
 import { resolve, dirname, join } from "path";
 import { fileURLToPath } from "url";
+import { Keypair } from "@stellar/stellar-sdk";
 import { Book, Policy } from "./types.js";
 import { buildWitnessArrays } from "./witness.js";
+import { publish } from "./chain.js";
 
 // Resolve the repo root relative to this compiled file's location.
 // dist/index.js -> ../.. = repo root (cli is one level up from src, repo root is one more up from cli).
@@ -162,8 +164,31 @@ program
   .description("Publish a proof as an on-chain attestation via the Soroban attest contract")
   .requiredOption("--proof <dir>", "directory containing proof artifacts")
   .option("--network <n>", "Stellar network to target", "testnet")
-  .action(async () => {
-    throw new Error("not implemented");
+  .action(async (opts: { proof: string; network: string }) => {
+    // Derive issuer from secret for display before handing off to publish().
+    const secret = process.env.AUSPEX_SECRET;
+    if (!secret) {
+      console.error("[auspex] error: AUSPEX_SECRET env var is required");
+      process.exit(1);
+    }
+    const issuer = Keypair.fromSecret(secret).publicKey();
+    const contractId = readFileSync(join(REPO_ROOT, ".auspex_contract_id"), "utf8").trim();
+
+    console.log(`[auspex] issuer:   ${issuer}`);
+    console.log(`[auspex] contract: ${contractId}`);
+    console.log(`[auspex] network:  ${opts.network}`);
+    console.log(`[auspex] proof:    ${opts.proof}`);
+
+    const { id, txHash } = await publish(opts.proof, opts.network);
+
+    console.log("\n[auspex] attestation published:");
+    console.log(`  issuer:         ${issuer}`);
+    console.log(`  contract:       ${contractId}`);
+    console.log(`  attestation id: ${id}`);
+    console.log(`  tx hash:        ${txHash}`);
+    if (opts.network === "testnet") {
+      console.log(`  explorer:       https://stellar.expert/explorer/testnet/tx/${txHash}`);
+    }
   });
 
 program

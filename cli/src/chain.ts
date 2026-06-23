@@ -1,0 +1,153 @@
+import { readFileSync } from "node:fs";
+import { resolve, dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import {
+  rpc,
+  Contract,
+  TransactionBuilder,
+  Keypair,
+  Address,
+  scValToNative,
+  xdr,
+} from "@stellar/stellar-sdk";
+
+// Compiled to cli/dist/chain.js — go up two levels (dist → cli → repo root).
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+
+const PROOF_BYTE_LENGTH = 14592;
+const PUBLIC_INPUTS_BYTE_LENGTH = 128;
+
+interface NetworkConfig {
+  rpcUrl: string;
+  passphrase: string;
+  allowHttp: boolean;
+}
+
+function networkConfig(network: string): NetworkConfig {
+  switch (network) {
+    case "testnet":
+      return {
+        rpcUrl: "https://soroban-testnet.stellar.org",
+        passphrase: "Test SDF Network ; September 2015",
+        allowHttp: false,
+      };
+    case "local":
+      return {
+        rpcUrl: "http://localhost:8000/soroban/rpc",
+        passphrase: "Standalone Network ; February 2017",
+        allowHttp: true,
+      };
+    default:
+      throw new Error(
+        `unsupported network: ${network}. Supported networks: testnet, local.`,
+      );
+  }
+}
+
+/**
+ * Submit a ZK solvency proof as an on-chain attestation via the Soroban
+ * attest contract. Reads raw proof and public_inputs bytes from proofDir,
+ * then builds, signs, and submits the attest invocation.
+ *
+ * @param proofDir - Directory containing proof artifacts (relative to cwd).
+ * @param network  - Stellar network to target ("testnet" | "local").
+ * @returns        Attestation id (u64 as string) and the transaction hash.
+ */
+export async function publish(
+  proofDir: string,
+  network: string,
+): Promise<{ id: string; txHash: string }> {
+  const secret = process.env.AUSPEX_SECRET;
+  if (!secret) {
+    throw new Error(
+      "AUSPEX_SECRET env var is required (source-account secret key)",
+    );
+  }
+
+  // Keep all network/RPC construction below the guard so the unset-secret
+  // unit test never touches the network or the filesystem.
+  const { rpcUrl, passphrase, allowHttp } = networkConfig(network);
+
+  const contractId = readFileSync(
+    join(REPO_ROOT, ".auspex_contract_id"),
+    "utf8",
+  ).trim();
+
+  const dir = resolve(process.cwd(), proofDir);
+  const proof = readFileSync(join(dir, "proof"));
+  const publicInputs = readFileSync(join(dir, "public_inputs"));
+
+  if (proof.length !== PROOF_BYTE_LENGTH) {
+    throw new Error(
+      `proof must be ${PROOF_BYTE_LENGTH} bytes, got ${proof.length}`,
+    );
+  }
+  if (publicInputs.length !== PUBLIC_INPUTS_BYTE_LENGTH) {
+    throw new Error(
+      `public_inputs must be ${PUBLIC_INPUTS_BYTE_LENGTH} bytes, got ${publicInputs.length}`,
+    );
+  }
+
+  const kp = Keypair.fromSecret(secret);
+  const issuer = kp.publicKey();
+
+  const server = new rpc.Server(rpcUrl, { allowHttp });
+  const account = await server.getAccount(issuer);
+  const contract = new Contract(contractId);
+
+  // Pass proof and public_inputs as raw Bytes exactly as read from disk —
+  // no hex encoding, no transformation. This is the same byte content that
+  // scripts/invoke_ultrahonk/invoke_ultrahonk.ts feeds the contract via the
+  // stellar CLI's --*-file-path flags.
+  const op = contract.call(
+    "attest",
+    new Address(issuer).toScVal(),
+    xdr.ScVal.scvBytes(proof),
+    xdr.ScVal.scvBytes(publicInputs),
+  );
+
+  const tx = new TransactionBuilder(account, {
+    fee: "1000000",
+    networkPassphrase: passphrase,
+  })
+    .addOperation(op)
+    .setTimeout(180)
+    .build();
+
+  // prepareTransaction assembles the Soroban resource fee and auth entries.
+  // Because tx source == issuer, the source-account signature satisfies
+  // issuer.require_auth() — no separate authorizeEntry signing needed.
+  const prepared = await server.prepareTransaction(tx);
+  prepared.sign(kp);
+
+  const sent = await server.sendTransaction(prepared);
+  if (sent.status === "ERROR") {
+    throw new Error(
+      `attest submission failed: ${JSON.stringify(sent.errorResult ?? sent)}`,
+    );
+  }
+  if (sent.status === "TRY_AGAIN_LATER") {
+    throw new Error(
+      "attest submission deferred by RPC (TRY_AGAIN_LATER) — retry shortly",
+    );
+  }
+
+  // Poll until the transaction is confirmed (up to ~30 s).
+  // At this point sent.status is PENDING or DUPLICATE — both mean the hash
+  // is valid and the tx is in-flight.
+  let got = await server.getTransaction(sent.hash);
+  for (let i = 0; i < 30 && got.status === "NOT_FOUND"; i++) {
+    await new Promise<void>((r) => setTimeout(r, 1000));
+    got = await server.getTransaction(sent.hash);
+  }
+
+  if (got.status !== "SUCCESS") {
+    throw new Error(
+      `attest tx ${sent.hash} did not succeed — final status: ${got.status}`,
+    );
+  }
+
+  // The contract returns the new attestation id as u64; scValToNative yields bigint.
+  const id = scValToNative(got.returnValue!) as bigint;
+  return { id: String(id), txHash: sent.hash };
+}
