@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 400" width="920" height="400" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#4FA08D"/>
+    </marker>
+    <style>
+      .h    { fill:#E9E5D8; font-size:22px; font-weight:700; }
+      .sub  { fill:#8AA0A0; font-size:13.5px; }
+      .zone { fill:none; stroke:#24454D; stroke-width:1.5; stroke-dasharray:6 6; }
+      .zlab { fill:#8AA0A0; font-size:11px; font-weight:600; letter-spacing:1.2px; }
+      .box  { fill:#142A30; stroke:#24454D; stroke-width:1.5; }
+      .bt   { fill:#E9E5D8; font-size:15px; font-weight:600; }
+      .bd   { fill:#8AA0A0; font-size:12px; }
+      .al   { fill:#8AA0A0; font-size:10.5px; }
+      .note { fill:#8AA0A0; font-size:12px; }
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="920" height="400" fill="#0B1418"/>
+
+  <!-- Header -->
+  <text x="44" y="46" class="h">Auspex</text>
+  <text x="143" y="46" class="sub">— zero-knowledge proof of solvency &amp; risk on Stellar</text>
+
+  <!-- Zones -->
+  <rect x="24"  y="98" width="452" height="252" rx="14" class="zone"/>
+  <rect x="500" y="98" width="396" height="252" rx="14" class="zone"/>
+  <text x="44"  y="122" class="zlab">OFF-CHAIN · PRIVATE — THE BOOK NEVER LEAVES THE ISSUER</text>
+  <text x="518" y="122" class="zlab">ON-CHAIN · STELLAR TESTNET — PUBLIC &amp; TAMPER-PROOF</text>
+
+  <!-- Boxes -->
+  <!-- 1 Issuer -->
+  <rect x="44" y="160" width="180" height="150" rx="12" class="box"/>
+  <text x="134" y="196" text-anchor="middle" class="bt">Issuer</text>
+  <text x="134" y="224" text-anchor="middle" class="bd">Private balance sheet</text>
+  <text x="134" y="244" text-anchor="middle" class="bd">+ risk policy (bps)</text>
+  <text x="134" y="276" text-anchor="middle" class="bd" fill="#6F8584">synthetic, labeled</text>
+
+  <!-- 2 Circuit -->
+  <rect x="272" y="160" width="180" height="150" rx="12" class="box"/>
+  <text x="362" y="196" text-anchor="middle" class="bt">Noir circuit</text>
+  <text x="362" y="224" text-anchor="middle" class="bd">Solvency · concentration</text>
+  <text x="362" y="244" text-anchor="middle" class="bd">· liquidity, proven</text>
+  <text x="362" y="276" text-anchor="middle" class="bd" fill="#4FA08D">proof + commitment</text>
+
+  <!-- 3 Contract -->
+  <rect x="518" y="160" width="170" height="150" rx="12" class="box"/>
+  <text x="603" y="196" text-anchor="middle" class="bt">Soroban contract</text>
+  <text x="603" y="224" text-anchor="middle" class="bd">Verifies the proof,</text>
+  <text x="603" y="244" text-anchor="middle" class="bd">stores attestation</text>
+  <text x="603" y="276" text-anchor="middle" class="bd" fill="#6F8584">who · policy · when</text>
+
+  <!-- 4 Verify -->
+  <rect x="716" y="160" width="160" height="150" rx="12" class="box"/>
+  <text x="796" y="196" text-anchor="middle" class="bt">Public verify</text>
+  <text x="796" y="224" text-anchor="middle" class="bd" fill="#C9A227">Solvent, within limits</text>
+  <text x="796" y="244" text-anchor="middle" class="bd">policy + commitment</text>
+  <text x="796" y="276" text-anchor="middle" class="bd" fill="#6F8584">no positions revealed</text>
+
+  <!-- Arrows -->
+  <line x1="224" y1="235" x2="270" y2="235" class="zone" stroke="#4FA08D" stroke-dasharray="0" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="247" y="225" text-anchor="middle" class="al">book +</text>
+  <text x="247" y="252" text-anchor="middle" class="al">policy</text>
+
+  <line x1="452" y1="235" x2="516" y2="235" class="zone" stroke="#4FA08D" stroke-dasharray="0" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="484" y="225" text-anchor="middle" class="al">proof +</text>
+  <text x="484" y="252" text-anchor="middle" class="al">inputs</text>
+
+  <line x1="688" y1="235" x2="714" y2="235" class="zone" stroke="#4FA08D" stroke-dasharray="0" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Footer note -->
+  <text x="460" y="378" text-anchor="middle" class="note">The verifier sees a valid proof, a policy, and a commitment — never an amount, a counterparty, or a position.</text>
+</svg>
