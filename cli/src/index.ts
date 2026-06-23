@@ -1,0 +1,234 @@
+#!/usr/bin/env node
+import { Command } from "commander";
+import { execFileSync } from "child_process";
+import { readFileSync, writeFileSync } from "fs";
+import { randomBytes } from "crypto";
+import { resolve, dirname, join } from "path";
+import { fileURLToPath } from "url";
+import { Keypair } from "@stellar/stellar-sdk";
+import { Book, Policy } from "./types.js";
+import { buildWitnessArrays, assertValidBook, assertValidPolicy } from "./witness.js";
+import { publish, readAttestation, formatAttestation, parseAttestationId } from "./chain.js";
+import { parseNargoField, normalizeToBigInt } from "./parse.js";
+
+// Resolve the repo root relative to this compiled file's location.
+// dist/index.js -> ../.. = repo root (cli is one level up from src, repo root is one more up from cli).
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+// __dirname = <repo>/cli/dist — go up 2 levels to reach repo root
+const REPO_ROOT = resolve(__dirname, "..", "..");
+
+const NARGO = join(process.env.HOME ?? "", ".nargo", "bin", "nargo");
+
+const program = new Command();
+
+program
+  .name("auspex")
+  .description("ZK proof-of-solvency attestation on Stellar");
+
+program
+  .command("prove")
+  .description("Generate a ZK solvency proof for a given book and policy")
+  .requiredOption("--book <path>", "path to book JSON file")
+  .requiredOption("--policy <path>", "path to policy JSON file")
+  .action(async (opts: { book: string; policy: string }) => {
+    const bookPath = resolve(process.cwd(), opts.book);
+    const policyPath = resolve(process.cwd(), opts.policy);
+
+    console.log(`[auspex] reading book:   ${bookPath}`);
+    console.log(`[auspex] reading policy: ${policyPath}`);
+
+    const rawBook: unknown = JSON.parse(readFileSync(bookPath, "utf8"));
+    assertValidBook(rawBook, bookPath);
+    const book: Book = rawBook;
+
+    const rawPolicy: unknown = JSON.parse(readFileSync(policyPath, "utf8"));
+    assertValidPolicy(rawPolicy, policyPath);
+    const policy: Policy = rawPolicy;
+
+    // Validate inputs before any subprocess work.
+    const { amounts, cpIds, isLiquid, active } = buildWitnessArrays(book);
+
+    // Generate a random 31-byte salt (keeps it within BN254 scalar field).
+    // NEVER log the salt value — it is the hiding factor for the Pedersen
+    // commitment (SPEC §15). Logging it would leak confidentiality, especially
+    // when Phase 4 invokes this CLI server-side and captures stdout.
+    const salt = "0x" + randomBytes(31).toString("hex");
+    console.log("[auspex] salt: generated (31 random CSPRNG bytes)");
+
+    // -------------------------------------------------------------------------
+    // Step 1: Derive commitment via the commitment helper circuit.
+    // -------------------------------------------------------------------------
+    const commitmentDir = join(REPO_ROOT, "circuits", "commitment");
+
+    const arr = (xs: string[]) => "[" + xs.map((x) => `"${x}"`).join(", ") + "]";
+    const commitmentProverToml = [
+      `amounts = ${arr(amounts)}`,
+      `counterparty_ids = ${arr(cpIds)}`,
+      `is_liquid = ${arr(isLiquid)}`,
+      `active = ${arr(active)}`,
+      `liabilities = "${book.liabilities}"`,
+      `salt = "${salt}"`,
+    ].join("\n");
+
+    writeFileSync(join(commitmentDir, "Prover.toml"), commitmentProverToml, "utf8");
+    console.log("[auspex] commitment/Prover.toml written");
+
+    // Compile the commitment circuit (idempotent if already compiled, but force
+    // recompile to guard against stale artifacts from a different Prover.toml).
+    execFileSync(NARGO, ["compile"], {
+      cwd: commitmentDir,
+      stdio: "inherit",
+    });
+
+    // Execute and capture stdout (println output appears there).
+    const executeOut = execFileSync(NARGO, ["execute"], {
+      cwd: commitmentDir,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "inherit"],
+    });
+
+    // Parse the Field value from nargo's println output.
+    // nargo prints hex (0x...) or decimal numbers; we look for either.
+    const commitment = parseNargoField(executeOut);
+    if (commitment === null) {
+      throw new Error(
+        `[auspex] could not parse commitment from nargo output:\n${executeOut}`,
+      );
+    }
+    console.log(`[auspex] commitment: ${commitment}`);
+
+    // -------------------------------------------------------------------------
+    // Step 2: Write solvency/Prover.toml combining all witness fields.
+    // -------------------------------------------------------------------------
+    const solvencyDir = join(REPO_ROOT, "circuits", "solvency");
+    const solvencyProverToml = [
+      `amounts = ${arr(amounts)}`,
+      `counterparty_ids = ${arr(cpIds)}`,
+      `is_liquid = ${arr(isLiquid)}`,
+      `active = ${arr(active)}`,
+      `liabilities = "${book.liabilities}"`,
+      `salt = "${salt}"`,
+      `commitment = "${commitment}"`,
+      `buffer_bps = "${policy.bufferBps}"`,
+      `max_concentration_bps = "${policy.maxConcentrationBps}"`,
+      `min_liquidity_bps = "${policy.minLiquidityBps}"`,
+    ].join("\n");
+
+    writeFileSync(join(solvencyDir, "Prover.toml"), solvencyProverToml, "utf8");
+    console.log("[auspex] solvency/Prover.toml written");
+
+    // -------------------------------------------------------------------------
+    // Step 3: Build the solvency circuit (compile + witness + prove + vk).
+    // -------------------------------------------------------------------------
+    console.log("[auspex] running: just build-circuits solvency ...");
+    execFileSync("just", ["build-circuits", "solvency"], {
+      cwd: REPO_ROOT,
+      stdio: "inherit",
+    });
+
+    // -------------------------------------------------------------------------
+    // Step 4: Self-check — verify the first public input matches our commitment.
+    // -------------------------------------------------------------------------
+    const publicInputsPath = join(solvencyDir, "target", "public_inputs");
+    const publicInputsBuf = readFileSync(publicInputsPath);
+    if (publicInputsBuf.length < 32) {
+      throw new Error(
+        `[auspex] public_inputs too short: ${publicInputsBuf.length} bytes`,
+      );
+    }
+    // First 32 bytes = first public input (commitment field), big-endian.
+    const onChainCommitment = "0x" + publicInputsBuf.subarray(0, 32).toString("hex");
+
+    const commitmentBigInt = normalizeToBigInt(commitment);
+    const onChainBigInt = normalizeToBigInt(onChainCommitment);
+
+    if (commitmentBigInt !== onChainBigInt) {
+      throw new Error(
+        `[auspex] SELF-CHECK FAILED — commitment mismatch!\n` +
+          `  derived:  ${commitment}\n` +
+          `  on-chain: ${onChainCommitment}`,
+      );
+    }
+    console.log("[auspex] self-check passed: commitment matches public_inputs[0]");
+
+    // -------------------------------------------------------------------------
+    // Step 5: Report artifacts.
+    // -------------------------------------------------------------------------
+    const targetDir = join(solvencyDir, "target");
+    const proofSize = readFileSync(join(targetDir, "proof")).length;
+    const vkSize = readFileSync(join(targetDir, "vk")).length;
+    const piSize = readFileSync(join(targetDir, "public_inputs")).length;
+
+    console.log("\n[auspex] proof generation complete:");
+    console.log(`  commitment:    ${commitment}`);
+    console.log(`  proof:         ${targetDir}/proof (${proofSize} bytes)`);
+    console.log(`  vk:            ${targetDir}/vk (${vkSize} bytes)`);
+    console.log(`  public_inputs: ${targetDir}/public_inputs (${piSize} bytes)`);
+    console.log("\n  Ready to publish with: auspex publish --proof circuits/solvency/target");
+  });
+
+program
+  .command("publish")
+  .description("Publish a proof as an on-chain attestation via the Soroban attest contract")
+  .requiredOption("--proof <dir>", "directory containing proof artifacts")
+  .option("--network <n>", "Stellar network to target", "testnet")
+  .action(async (opts: { proof: string; network: string }) => {
+    // Derive issuer from secret for display before handing off to publish().
+    const secret = process.env.AUSPEX_SECRET;
+    if (!secret) {
+      console.error("[auspex] error: AUSPEX_SECRET env var is required");
+      process.exit(1);
+    }
+    const issuer = Keypair.fromSecret(secret).publicKey();
+    const contractId = readFileSync(join(REPO_ROOT, ".auspex_contract_id"), "utf8").trim();
+
+    console.log(`[auspex] issuer:   ${issuer}`);
+    console.log(`[auspex] contract: ${contractId}`);
+    console.log(`[auspex] network:  ${opts.network}`);
+    console.log(`[auspex] proof:    ${opts.proof}`);
+
+    const { id, txHash } = await publish(opts.proof, opts.network);
+
+    console.log("\n[auspex] attestation published:");
+    console.log(`  issuer:         ${issuer}`);
+    console.log(`  contract:       ${contractId}`);
+    console.log(`  attestation id: ${id}`);
+    console.log(`  tx hash:        ${txHash}`);
+    if (opts.network === "testnet") {
+      console.log(`  explorer:       https://stellar.expert/explorer/testnet/tx/${txHash}`);
+    }
+  });
+
+program
+  .command("verify")
+  .description("Verify an on-chain attestation by issuer address")
+  .requiredOption("--issuer <addr>", "Stellar address of the attesting issuer")
+  .option("--id <n>", "specific attestation ID (defaults to latest)")
+  .option("--network <n>", "Stellar network to target", "testnet")
+  .action(async (opts: { issuer: string; id?: string; network: string }) => {
+    let id: number | undefined;
+    if (opts.id !== undefined) {
+      try { id = parseAttestationId(opts.id); }
+      catch (e) { console.error(`❌ ${(e as Error).message}`); process.exit(1); }
+    }
+    const idLabel = opts.id !== undefined ? opts.id : "latest";
+
+    console.log(`[auspex] querying attestation for issuer: ${opts.issuer}`);
+    console.log(`[auspex] network: ${opts.network}`);
+
+    const att = await readAttestation(opts.issuer, opts.network, id);
+
+    if (att === null) {
+      console.error(`❌ No attestation found for ${opts.issuer}`);
+      process.exit(1);
+    }
+
+    const lines = formatAttestation(att, { idLabel, network: opts.network });
+    for (const line of lines) {
+      console.log(line);
+    }
+  });
+
+program.parseAsync();
+
