@@ -26,8 +26,8 @@ fn attest_stores_attestation_for_valid_proof() {
     let id1 = client.attest(&issuer, &proof, &pi);
     assert_eq!(id1, 1);
 
-    // Read the stored attestation directly (read methods land in Task 2.3) and
-    // confirm the public-input decode matches the committed solvency policy.
+    // Read the stored attestation directly from persistent storage and confirm
+    // the public-input decode matches the committed solvency policy.
     let stored: Attestation = env.as_contract(&contract_id, || {
         env.storage()
             .persistent()
@@ -91,4 +91,41 @@ fn attest_rejects_tampered_proof() {
         })
         .expect_err("expected VerificationFailed");
     assert_eq!(err as u32, Error::VerificationFailed as u32);
+}
+
+#[test]
+fn attest_requires_issuer_auth() {
+    let env = test_env();
+    // Intentionally NO mock_all_auths(): the issuer has not authorized the call.
+    let f = Fixture::load("solvency");
+    let (proof, vk, pi) = f.into_bytes(&env);
+
+    let contract_id = env.register(AuspexContract, (vk.clone(),));
+    let client = AuspexContractClient::new(&env, &contract_id);
+    let issuer = Address::generate(&env);
+
+    // issuer.require_auth() must reject an unauthorized attest.
+    let res = client.try_attest(&issuer, &proof, &pi);
+    assert!(res.is_err(), "attest must fail without issuer authorization");
+}
+
+#[test]
+fn attest_rejects_wrong_length_public_inputs() {
+    let env = test_env();
+    env.mock_all_auths();
+    let f = Fixture::load("solvency");
+    let (proof, vk, _pi) = f.into_bytes(&env);
+    // A 96-byte vector (3 fields) instead of the required 128 (4 fields).
+    let short_pi = Bytes::from_slice(&env, &[0u8; 96]);
+
+    let contract_id = env.register(AuspexContract, (vk.clone(),));
+    let issuer = Address::generate(&env);
+
+    // 96 != 128 (NUM_PUBLIC_INPUTS * FIELD_BYTES) -> rejected before verify.
+    let err = env
+        .as_contract(&contract_id, || {
+            AuspexContract::attest(env.clone(), issuer.clone(), proof.clone(), short_pi.clone())
+        })
+        .expect_err("expected InvalidPublicInputs");
+    assert_eq!(err as u32, Error::InvalidPublicInputs as u32);
 }
