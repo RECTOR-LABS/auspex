@@ -160,4 +160,16 @@ describe("parseAttestationId", () => {
       '--id must be a non-negative integer, got: ',
     );
   });
+
+  it('throws on "0x10" (hex literal — not pure decimal)', () => {
+    expect(() => parseAttestationId("0x10")).toThrow(
+      '--id must be a non-negative integer, got: 0x10',
+    );
+  });
+
+  it('throws on "1e3" (scientific notation — not pure decimal)', () => {
+    expect(() => parseAttestationId("1e3")).toThrow(
+      '--id must be a non-negative integer, got: 1e3',
+    );
+  });
 });

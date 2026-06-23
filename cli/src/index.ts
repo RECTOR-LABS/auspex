@@ -7,8 +7,9 @@ import { resolve, dirname, join } from "path";
 import { fileURLToPath } from "url";
 import { Keypair } from "@stellar/stellar-sdk";
 import { Book, Policy } from "./types.js";
-import { buildWitnessArrays } from "./witness.js";
+import { buildWitnessArrays, assertValidBook, assertValidPolicy } from "./witness.js";
 import { publish, readAttestation, formatAttestation, parseAttestationId } from "./chain.js";
+import { parseNargoField, normalizeToBigInt } from "./parse.js";
 
 // Resolve the repo root relative to this compiled file's location.
 // dist/index.js -> ../.. = repo root (cli is one level up from src, repo root is one more up from cli).
@@ -37,15 +38,23 @@ program
     console.log(`[auspex] reading book:   ${bookPath}`);
     console.log(`[auspex] reading policy: ${policyPath}`);
 
-    const book: Book = JSON.parse(readFileSync(bookPath, "utf8"));
-    const policy: Policy = JSON.parse(readFileSync(policyPath, "utf8"));
+    const rawBook: unknown = JSON.parse(readFileSync(bookPath, "utf8"));
+    assertValidBook(rawBook, bookPath);
+    const book: Book = rawBook;
+
+    const rawPolicy: unknown = JSON.parse(readFileSync(policyPath, "utf8"));
+    assertValidPolicy(rawPolicy, policyPath);
+    const policy: Policy = rawPolicy;
 
     // Validate inputs before any subprocess work.
     const { amounts, cpIds, isLiquid, active } = buildWitnessArrays(book);
 
     // Generate a random 31-byte salt (keeps it within BN254 scalar field).
+    // NEVER log the salt value — it is the hiding factor for the Pedersen
+    // commitment (SPEC §15). Logging it would leak confidentiality, especially
+    // when Phase 4 invokes this CLI server-side and captures stdout.
     const salt = "0x" + randomBytes(31).toString("hex");
-    console.log(`[auspex] salt: ${salt}`);
+    console.log("[auspex] salt: generated (31 random CSPRNG bytes)");
 
     // -------------------------------------------------------------------------
     // Step 1: Derive commitment via the commitment helper circuit.
@@ -223,44 +232,3 @@ program
 
 program.parseAsync();
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/**
- * Parse a Field value from nargo's println output.
- * nargo prints one value per line; it may be hex (0x...) or decimal.
- * Returns the value normalised to lowercase hex with 0x prefix, or null if
- * no parseable value is found.
- */
-function parseNargoField(output: string): string | null {
-  // The commitment is the field value printed by the circuit. Scan all lines
-  // and keep the LAST field-shaped match, so a stray numeric status line
-  // emitted before the value cannot be mistaken for the commitment.
-  let found: string | null = null;
-  for (const line of output.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    // Skip nargo status lines like "[commitment] Circuit witness successfully solved"
-    if (trimmed.startsWith("[")) continue;
-
-    // Hex Field value
-    if (/^0x[0-9a-fA-F]+$/.test(trimmed)) {
-      found = trimmed.toLowerCase();
-    } else if (/^\d{10,}$/.test(trimmed)) {
-      // Decimal Field value (large integer, at least 10 digits)
-      found = "0x" + BigInt(trimmed).toString(16).padStart(64, "0");
-    }
-  }
-  return found;
-}
-
-/**
- * Normalise a hex or decimal field value to BigInt for comparison.
- */
-function normalizeToBigInt(value: string): bigint {
-  if (value.startsWith("0x") || value.startsWith("0X")) {
-    return BigInt(value);
-  }
-  return BigInt(value);
-}

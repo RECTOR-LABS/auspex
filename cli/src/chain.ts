@@ -77,12 +77,23 @@ export interface FormatAttestationOpts {
 
 /**
  * Parse a raw --id string into a non-negative integer.
- * Throws an actionable Error if the value is not a non-negative integer.
+ * Accepts only pure decimal digits (no hex, no scientific notation, no
+ * whitespace-padded values, no leading sign). Throws an actionable Error for
+ * anything else.
  * Pure function — no I/O, fully unit-testable.
  */
 export function parseAttestationId(raw: string): number {
-  const n = Number(raw);
-  if (raw.trim() === "" || !Number.isInteger(n) || n < 0) {
+  const t = raw.trim();
+  // Reject anything that is not a sequence of decimal digits.
+  // This excludes "0x10" (hex), "1e3" (scientific notation), "-1" (sign),
+  // "1.5" (decimal point), and empty strings.
+  if (!/^\d+$/.test(t)) {
+    throw new Error(`--id must be a non-negative integer, got: ${raw}`);
+  }
+  const n = Number(t);
+  // Belt-and-suspenders: guard against any exotic Number() coercions the
+  // regex might not have caught (should be unreachable after the regex).
+  if (!Number.isInteger(n) || n < 0) {
     throw new Error(`--id must be a non-negative integer, got: ${raw}`);
   }
   return n;
