@@ -88,7 +88,12 @@ build_circuit() {
   fi
 
   if [[ ! -f Prover.toml ]]; then
-    "${nargo_bin}" check --overwrite
+    if [[ -f Prover.toml.example ]]; then
+      echo "  (no Prover.toml found — copying from Prover.toml.example)"
+      cp Prover.toml.example Prover.toml
+    else
+      "${nargo_bin}" check --overwrite
+    fi
   fi
 
   "${nargo_bin}" compile

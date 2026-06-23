@@ -21,6 +21,8 @@ target/
 
 # Noir / Barretenberg
 circuits/**/target/
+circuits/commitment/Prover.toml
+circuits/solvency/Prover.toml
 *.gz
 proofs/
 witness/
