@@ -1,0 +1,19 @@
+{
+  "name": "auspex-cli",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": { "auspex": "./dist/index.js" },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "commander": "^15.0.0",
+    "@stellar/stellar-sdk": "^16.0.1"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.9",
+    "@types/node": "^26.0.0"
+  }
+}

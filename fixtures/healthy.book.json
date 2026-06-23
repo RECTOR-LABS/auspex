@@ -1,0 +1,9 @@
+{
+  "_disclaimer": "SYNTHETIC SAMPLE DATA — not a real balance sheet.",
+  "positions": [
+    { "amount": 500000, "counterpartyId": 0, "isLiquid": true },
+    { "amount": 300000, "counterpartyId": 1, "isLiquid": true },
+    { "amount": 200000, "counterpartyId": 2, "isLiquid": false }
+  ],
+  "liabilities": 800000
+}

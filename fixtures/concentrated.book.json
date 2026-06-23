@@ -1,0 +1,8 @@
+{
+  "_disclaimer": "SYNTHETIC SAMPLE DATA — intentionally over-concentrated for the failure demo.",
+  "positions": [
+    { "amount": 800000, "counterpartyId": 0, "isLiquid": true },
+    { "amount": 200000, "counterpartyId": 1, "isLiquid": true }
+  ],
+  "liabilities": 100000
+}
