@@ -184,9 +184,11 @@ struct Attestation {
 ```
 Persistent storage keyed by `(issuer, attestation_id)`, plus a per-issuer counter.
 
+> **Durability caveat (known, future hardening):** entries are written to Soroban *persistent* storage but v1 does not yet `extend_ttl` them. On a long-lived deployment a never-extended entry can be archived (and must be restored before reading); a counter that archives and reads back as absent could re-issue id 0. This is acceptable for the testnet demo window; before any production/mainnet use, `attest` must extend the TTL of the `Item` and `Count` entries on every write. Tracked as a Phase-2 carry-forward.
+
 ### 8.2 Interface
-- `attest(issuer: Address, proof: Bytes, public_inputs: Vec<Bytes>) -> u64`
-  `issuer.require_auth()`; verify the proof against `public_inputs` via the verifier; on success store `Attestation` (stamping ledger time/seq), emit `attested` event, return the new `attestation_id`. **Reverts** if the proof is invalid.
+- `attest(issuer: Address, proof: Bytes, public_inputs: Bytes) -> u64`
+  `public_inputs` is the flat 128-byte buffer of four 32-byte **big-endian** field elements `[commitment, buffer_bps, max_concentration_bps, min_liquidity_bps]` — matching the verifier API and the `bb` proof format (not a `Vec<Bytes>`). `issuer.require_auth()`; verify the proof against `public_inputs` via the verifier; on success decode the commitment + policy, store `Attestation` (stamping ledger time/seq), emit `attested` event, return the new `attestation_id`. **Reverts** if the proof is invalid. (Implemented as `-> Result<u64, Error>`; the generated client returns the `u64`.)
 - `get_attestation(issuer: Address, id: u64) -> Option<Attestation>`
 - `get_latest(issuer: Address) -> Option<Attestation>`
 - `count(issuer: Address) -> u64`

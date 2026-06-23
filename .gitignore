@@ -16,6 +16,8 @@ dist/
 # Rust / Soroban
 target/
 **/target/
+# Soroban test snapshots are regenerated on every test run (not tracked, per contracts/identity)
+**/test_snapshots/
 
 # Noir / Barretenberg
 circuits/**/target/
@@ -31,4 +33,5 @@ witness/
 # Vendored harness runtime state
 .contract_id
 .identity_contract_id
+.auspex_contract_id
 .superpowers/

@@ -128,3 +128,63 @@ verify-identity contract_id="":
 # Run the full Identity E2E pipeline (build circuit → build contract → deploy → prove)
 identity-e2e network="local":
     ./scripts/run_identity_e2e.sh {{network}}
+
+# =============================================================================
+# Auspex Contract
+# =============================================================================
+
+# Build only the Auspex contract WASM
+build-auspex-contract:
+    cargo build --release --target wasm32v1-none --package auspex
+
+# Deploy the Auspex attestation contract with the solvency circuit's VK
+deploy-auspex:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source ./scripts/config.sh
+    CIRCUIT_DIR="$ROOT_DIR/circuits/solvency"
+    CONTRACT_WASM="$ROOT_DIR/target/wasm32v1-none/release/auspex.wasm"
+    just build-circuits solvency
+    stellar contract build
+    ./scripts/fund_account.sh
+    CONTRACT_ID=$(stellar contract deploy \
+      --wasm "$CONTRACT_WASM" \
+      --source "$STELLAR_SOURCE_ACCOUNT" \
+      --network "$STELLAR_NETWORK_NAME" \
+      -- \
+      --vk_bytes-file-path "$CIRCUIT_DIR/target/vk")
+    echo "$CONTRACT_ID" > "$ROOT_DIR/.auspex_contract_id"
+    echo "Auspex contract deployed: $CONTRACT_ID"
+
+# Attest the solvency proof on-chain, then read back the latest attestation.
+# If no contract_id is provided, reads from .auspex_contract_id.
+verify-auspex contract_id="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source ./scripts/config.sh
+    CIRCUIT_DIR="$ROOT_DIR/circuits/solvency"
+    if [ -z "{{contract_id}}" ]; then
+      CONTRACT_ID=$(cat "$ROOT_DIR/.auspex_contract_id")
+    else
+      CONTRACT_ID="{{contract_id}}"
+    fi
+    ISSUER=$(stellar keys address "$STELLAR_SOURCE_ACCOUNT")
+    echo "Attesting as issuer $ISSUER ..."
+    stellar contract invoke \
+      --id "$CONTRACT_ID" \
+      --source "$STELLAR_SOURCE_ACCOUNT" \
+      --network "$STELLAR_NETWORK_NAME" \
+      --send yes \
+      -- \
+      attest \
+      --issuer "$ISSUER" \
+      --proof-file-path "$CIRCUIT_DIR/target/proof" \
+      --public_inputs-file-path "$CIRCUIT_DIR/target/public_inputs"
+    echo "Reading latest attestation ..."
+    stellar contract invoke \
+      --id "$CONTRACT_ID" \
+      --source "$STELLAR_SOURCE_ACCOUNT" \
+      --network "$STELLAR_NETWORK_NAME" \
+      -- \
+      get_latest \
+      --issuer "$ISSUER"
