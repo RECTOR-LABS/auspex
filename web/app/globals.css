@@ -1,0 +1,54 @@
+@import "tailwindcss";
+
+/* ─── Auspex design tokens ──────────────────────────────────────────────────
+   Dark-first palette & typography. Every colour comes from phase4-design-system.
+   Token names drive Tailwind utilities: bg-ink, text-verdigris, border-line, etc.
+   Fonts are wired via CSS variables that the layout injects through next/font.
+   ─────────────────────────────────────────────────────────────────────────── */
+
+@theme {
+  /* Palette */
+  --color-ink:       #0B1418;
+  --color-slate:     #142A30;
+  --color-slate-2:   #1B363D;
+  --color-line:      #24454D;
+  --color-verdigris: #4FA08D;
+  --color-brass:     #C9A227;
+  --color-bone:      #E9E5D8;
+  --color-muted:     #8AA0A0;
+  --color-danger:    #D2693F;
+
+  /* Typography — CSS vars injected by next/font variables on <html> */
+  --font-display: var(--font-space-grotesk), system-ui, sans-serif;
+  --font-mono:    var(--font-ibm-plex-mono), ui-monospace, monospace;
+  --font-body:    var(--font-inter), system-ui, sans-serif;
+}
+
+/* ─── Page defaults ─────────────────────────────────────────────────────── */
+
+html {
+  background-color: #0B1418; /* ink — avoids flash before Tailwind hydrates */
+  color: #E9E5D8;            /* bone */
+  font-family: var(--font-inter), system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ─── Focus rings — verdigris, always visible ──────────────────────────── */
+
+:focus-visible {
+  outline: 2px solid #4FA08D;
+  outline-offset: 2px;
+}
+
+/* ─── Motion — honour prefers-reduced-motion ────────────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
