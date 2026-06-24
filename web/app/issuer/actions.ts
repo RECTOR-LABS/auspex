@@ -36,6 +36,35 @@ function proofDirPath(): string {
   return path.join(process.cwd(), "..", "circuits", "solvency", "target");
 }
 
+/* ─── Prover serialization ───────────────────────────────────────────────────
+ * The CLI proves against a SHARED circuit working tree
+ * (circuits/{commitment,solvency}/Prover.toml + target/). Two concurrent
+ * requests would clobber each other's witness between write and read, producing
+ * a proof over the wrong book — a correctness failure of the core ZK property.
+ * Serialize the prove→publish critical section across every request handled by
+ * this server instance. (Production hardening: give each request its own circuit
+ * working dir instead of serializing; tracked as future work.)
+ * ───────────────────────────────────────────────────────────────────────── */
+
+let proverLock: Promise<void> = Promise.resolve();
+
+/**
+ * Acquire the prover lock. Resolves once any in-flight prove→publish has
+ * finished, and returns a release fn the caller MUST invoke (in a `finally`)
+ * so the next queued request can proceed. Chains past failures so one errored
+ * request never wedges the queue.
+ */
+async function acquireProverLock(): Promise<() => void> {
+  let release!: () => void;
+  const next = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const previous = proverLock;
+  proverLock = previous.then(() => next);
+  await previous;
+  return release;
+}
+
 /* ─── generateAndPublish ─────────────────────────────────────────────────── */
 
 /**
@@ -134,6 +163,7 @@ export async function generateAndPublish(
   // own cwd, so absolute paths are required for correctness.
 
   let tmpDir: string | null = null;
+  let releaseLock: (() => void) | null = null;
 
   try {
     tmpDir = mkdtempSync(path.join(os.tmpdir(), "auspex-"));
@@ -148,6 +178,10 @@ export async function generateAndPublish(
 
     const policy = { bufferBps, maxConcentrationBps, minLiquidityBps };
     writeFileSync(policyTmp, JSON.stringify(policy), "utf8");
+
+    // Serialize from here on: prove + publish both operate on the shared
+    // circuit working tree, so only one request may hold it at a time.
+    releaseLock = await acquireProverLock();
 
     // ── 4. Run prove ─────────────────────────────────────────────────────
 
@@ -260,6 +294,11 @@ export async function generateAndPublish(
       minLiquidityBps,
     };
   } finally {
+    // Release the prover lock first so the next queued request can proceed.
+    if (releaseLock) {
+      releaseLock();
+    }
+
     // ── 7. Clean up temp dir — always, regardless of outcome ─────────────
     if (tmpDir) {
       try {
