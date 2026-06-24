@@ -9,6 +9,10 @@ without revealing a single position, counterparty, or amount. The proof is verif
 contract; anyone can check the result in seconds, and no one can forge a passing one.
 </p>
 
+<p align="center"><img src="assets/auspex-verify.gif" alt="Verifying an issuer on Auspex: a public Stellar address resolves to a 'Solvent & within risk limits' verdict beside a sealed balance sheet — no positions revealed" width="100%"></p>
+
+<p align="center"><em>Public verification: a verdict and the policy proven — the balance sheet stays sealed.</em></p>
+
 <p align="center"><img src="assets/architecture.svg" alt="Auspex architecture: issuer → Noir circuit → Soroban contract → public verify" width="100%"></p>
 
 ---
@@ -44,7 +48,7 @@ Three pieces:
 
 - **`circuits/solvency`** — the Noir circuit (`N=64` positions, `K=16` counterparties; proof 14,592 B, public inputs 128 B).
 - **`contracts/auspex`** — the Soroban contract: `attest(issuer, proof, public_inputs) -> id`, plus read methods `get_latest` / `get_attestation` / `count`. It reuses a vendored UltraHonk verifier.
-- **`cli/`** + **`web/`** — the glue and the two surfaces (issue + publish; public verify).
+- **`cli/`** + **`web/`** — the glue and the surfaces: issue + publish, public verify, a **solvency-heartbeat** timeline, and an **auditor view-key** for selective disclosure.
 
 ## The load-bearing property (the cheat demo)
 
@@ -74,6 +78,11 @@ AUSPEX_SECRET=$(stellar keys secret alice) \
 
 # 4. Anyone verifies it (read-only, no secret)
 node cli/dist/index.js verify --issuer <ISSUER_ADDRESS> --network testnet
+
+# 5. (Optional) Selective disclosure — prove with `--view-key out.json` to retain
+#    the private {book, salt}; a designated auditor then re-derives the commitment
+#    and sees the full book, while the public still sees only the verdict:
+node cli/dist/index.js audit --view-key out.json --issuer <ISSUER_ADDRESS> --network testnet
 ```
 
 **Web app** (issuer + public verify surfaces):
@@ -83,7 +92,7 @@ cd web && pnpm install
 AUSPEX_SECRET=$(stellar keys secret alice) pnpm dev   # http://localhost:3000
 ```
 
-The book is processed **server-side only** and never leaves the machine; only the proof and the attestation are published. See [`web/README.md`](web/README.md) for details.
+The book is processed **server-side only** and never leaves the machine; only the proof and the attestation are published. Three surfaces: **issue & publish**, **public verify**, and a **solvency heartbeat** that traces an issuer's attestations over time. See [`web/README.md`](web/README.md) for details.
 
 ## Live on testnet
 
@@ -108,8 +117,8 @@ auspex/
   circuits/commitment/    # helper circuit — derives the Pedersen commitment for the CLI
   contracts/auspex/       # Soroban contract: verify-then-attest + read methods
   crates/                 # vendored UltraHonk Soroban verifier harness (own license)
-  cli/                    # TypeScript CLI: prove / publish / verify
-  web/                    # Next.js app: issuer + public verify
+  cli/                    # TypeScript CLI: prove / publish / verify / audit (view-key)
+  web/                    # Next.js app: issuer + public verify + solvency heartbeat
   fixtures/               # synthetic books + policies (labeled)
   scripts/demo_cheat.sh   # the load-bearing cheat-attempt demo
   SPEC.md · PLAN.md       # the design spec and the build plan
