@@ -10,6 +10,12 @@ import { Book, Policy } from "./types.js";
 import { buildWitnessArrays, assertValidBook, assertValidPolicy } from "./witness.js";
 import { publish, readAttestation, formatAttestation, parseAttestationId } from "./chain.js";
 import { parseNargoField, normalizeToBigInt } from "./parse.js";
+import {
+  assertValidViewKey,
+  computeBookMetrics,
+  commitmentsMatch,
+  formatAuditReport,
+} from "./audit.js";
 
 // Resolve the repo root relative to this compiled file's location.
 // dist/index.js -> ../.. = repo root (cli is one level up from src, repo root is one more up from cli).
@@ -31,7 +37,11 @@ program
   .description("Generate a ZK solvency proof for a given book and policy")
   .requiredOption("--book <path>", "path to book JSON file")
   .requiredOption("--policy <path>", "path to policy JSON file")
-  .action(async (opts: { book: string; policy: string }) => {
+  .option(
+    "--view-key <path>",
+    "also write a PRIVATE {book,salt} view-key file enabling later auditor disclosure",
+  )
+  .action(async (opts: { book: string; policy: string; viewKey?: string }) => {
     const bookPath = resolve(process.cwd(), opts.book);
     const policyPath = resolve(process.cwd(), opts.policy);
 
@@ -191,6 +201,24 @@ program
       console.log(`  proof:         ${targetDir}/proof (${proofSize} bytes)`);
       console.log(`  vk:            ${targetDir}/vk (${vkSize} bytes)`);
       console.log(`  public_inputs: ${targetDir}/public_inputs (${piSize} bytes)`);
+
+      // Optional: retain a private view-key ({book, salt, commitment}) so a
+      // designated auditor can later re-derive the commitment and see the book
+      // (selective disclosure). The salt is otherwise scrubbed below, so this is
+      // the only way to keep it — written to a user-chosen path, never the repo.
+      if (opts.viewKey) {
+        const viewKeyPath = resolve(process.cwd(), opts.viewKey);
+        writeFileSync(
+          viewKeyPath,
+          JSON.stringify({ book, salt, commitment }, null, 2) + "\n",
+          "utf8",
+        );
+        console.log(`\n[auspex] view-key written to ${viewKeyPath}`);
+        console.log(
+          "[auspex] KEEP IT PRIVATE — it reveals the full book; share only with a designated auditor.",
+        );
+      }
+
       console.log("\n  Ready to publish with: auspex publish --proof circuits/solvency/target");
     } finally {
       // -----------------------------------------------------------------------
@@ -273,6 +301,92 @@ program
     for (const line of lines) {
       console.log(line);
     }
+  });
+
+program
+  .command("audit")
+  .description(
+    "Auditor: re-derive the commitment from a view-key and confirm it matches the on-chain attestation (selective disclosure)",
+  )
+  .requiredOption("--view-key <path>", "path to the private view-key file from `prove --view-key`")
+  .requiredOption("--issuer <addr>", "Stellar address of the attesting issuer")
+  .option("--id <n>", "specific attestation ID (defaults to latest)")
+  .option("--network <n>", "Stellar network to target", "testnet")
+  .action(async (opts: { viewKey: string; issuer: string; id?: string; network: string }) => {
+    const viewKeyPath = resolve(process.cwd(), opts.viewKey);
+    const rawViewKey: unknown = JSON.parse(readFileSync(viewKeyPath, "utf8"));
+    assertValidViewKey(rawViewKey, viewKeyPath);
+    const viewKey = rawViewKey;
+    // Deep-validate the revealed book so a tampered view-key fails cleanly.
+    assertValidBook(viewKey.book, viewKeyPath);
+
+    let id: number | undefined;
+    if (opts.id !== undefined) {
+      try { id = parseAttestationId(opts.id); }
+      catch (e) { console.error(`❌ ${(e as Error).message}`); process.exit(1); }
+    }
+    const idLabel = opts.id !== undefined ? opts.id : "latest";
+
+    console.log(`[auspex] re-deriving commitment from view-key: ${viewKeyPath}`);
+
+    // Re-derive the commitment from the revealed (book, salt) via the commitment
+    // circuit — mirrors `prove` step 1 — then scrub the witness from disk.
+    const { amounts, cpIds, isLiquid, active } = buildWitnessArrays(viewKey.book);
+    const commitmentDir = join(REPO_ROOT, "circuits", "commitment");
+    const commitmentProverTomlPath = join(commitmentDir, "Prover.toml");
+    const arr = (xs: string[]) => "[" + xs.map((x) => `"${x}"`).join(", ") + "]";
+
+    let recomputed: string;
+    try {
+      const body = [
+        `amounts = ${arr(amounts)}`,
+        `counterparty_ids = ${arr(cpIds)}`,
+        `is_liquid = ${arr(isLiquid)}`,
+        `active = ${arr(active)}`,
+        `liabilities = "${viewKey.book.liabilities}"`,
+        `salt = "${viewKey.salt}"`,
+      ].join("\n");
+      writeFileSync(commitmentProverTomlPath, body, "utf8");
+      execFileSync(NARGO, ["compile"], { cwd: commitmentDir, stdio: "inherit" });
+      const out = execFileSync(NARGO, ["execute"], {
+        cwd: commitmentDir,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "inherit"],
+      });
+      const parsed = parseNargoField(out);
+      if (parsed === null) {
+        throw new Error(`could not parse commitment from nargo output:\n${out}`);
+      }
+      recomputed = parsed;
+    } finally {
+      rmSync(commitmentProverTomlPath, { force: true });
+    }
+
+    const att = await readAttestation(opts.issuer, opts.network, id);
+    if (att === null) {
+      console.error(`❌ No attestation found for ${opts.issuer}`);
+      process.exit(1);
+    }
+
+    const onChainBytes = Buffer.from(att.commitment);
+    const match = commitmentsMatch(recomputed, onChainBytes);
+    const lines = formatAuditReport({
+      match,
+      book: viewKey.book,
+      metrics: computeBookMetrics(viewKey.book),
+      policy: {
+        bufferBps: att.buffer_bps,
+        maxConcentrationBps: att.max_concentration_bps,
+        minLiquidityBps: att.min_liquidity_bps,
+      },
+      issuer: opts.issuer,
+      idLabel,
+      recomputedCommitment: recomputed,
+      onChainCommitment: "0x" + onChainBytes.toString("hex"),
+    });
+    for (const line of lines) console.log(line);
+
+    if (!match) process.exit(1);
   });
 
 program.parseAsync().catch((err: unknown) => {
