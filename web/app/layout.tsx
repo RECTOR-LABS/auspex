@@ -96,6 +96,14 @@ function Header() {
                 Verify
               </Link>
             </li>
+            <li>
+              <Link
+                href="/heartbeat"
+                className="font-body text-sm text-muted transition-colors hover:text-verdigris underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-verdigris focus-visible:outline-offset-2 rounded-sm"
+              >
+                Heartbeat
+              </Link>
+            </li>
           </ul>
         </nav>
       </div>
