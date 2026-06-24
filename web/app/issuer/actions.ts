@@ -189,12 +189,18 @@ export async function generateAndPublish(
       runNode(cli, ["prove", "--book", bookTmp, "--policy", policyTmp]);
     } catch (err) {
       // Non-zero exit = constraint violation (unsatisfiable book) or missing
-      // toolchain. Either way: no proof exists. Log server-side only, bounded —
-      // the error message can carry captured subprocess stdout/stderr.
-      console.error(
-        "[auspex:issuer] prove failed:",
-        (err as Error).message.slice(0, 200),
-      );
+      // toolchain; ETIMEDOUT = the prover exceeded its ceiling. Log server-side
+      // only, bounded — the message can carry captured subprocess output.
+      const e = err as NodeJS.ErrnoException;
+      console.error("[auspex:issuer] prove failed:", e.message.slice(0, 200));
+      if (e.code === "ETIMEDOUT") {
+        return {
+          ok: false,
+          error:
+            "Proof generation timed out before it finished. The prover may be " +
+            "overloaded — please try again.",
+        };
+      }
       return {
         ok: false,
         error:
