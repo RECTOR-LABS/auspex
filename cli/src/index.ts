@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { Command } from "commander";
 import { execFileSync } from "child_process";
-import { readFileSync, writeFileSync } from "fs";
+import { readFileSync, writeFileSync, copyFileSync, rmSync } from "fs";
 import { randomBytes } from "crypto";
 import { resolve, dirname, join } from "path";
 import { fileURLToPath } from "url";
@@ -57,115 +57,160 @@ program
     console.log("[auspex] salt: generated (31 random CSPRNG bytes)");
 
     // -------------------------------------------------------------------------
-    // Step 1: Derive commitment via the commitment helper circuit.
+    // Circuit working-tree paths. Prover.toml holds the entire private book
+    // (every amount, counterparty, the liabilities total) plus the hiding salt,
+    // so it is scrubbed from disk in `finally` below once proving finishes —
+    // success or failure — and must never linger (audit: High). The target/
+    // artifacts (proof, vk, public_inputs) are deliberately kept; `publish`
+    // reads them next.
     // -------------------------------------------------------------------------
     const commitmentDir = join(REPO_ROOT, "circuits", "commitment");
+    const solvencyDir = join(REPO_ROOT, "circuits", "solvency");
+    const commitmentProverTomlPath = join(commitmentDir, "Prover.toml");
+    const solvencyProverTomlPath = join(solvencyDir, "Prover.toml");
+    const solvencyProverTomlExample = join(solvencyDir, "Prover.toml.example");
 
     const arr = (xs: string[]) => "[" + xs.map((x) => `"${x}"`).join(", ") + "]";
-    const commitmentProverToml = [
-      `amounts = ${arr(amounts)}`,
-      `counterparty_ids = ${arr(cpIds)}`,
-      `is_liquid = ${arr(isLiquid)}`,
-      `active = ${arr(active)}`,
-      `liabilities = "${book.liabilities}"`,
-      `salt = "${salt}"`,
-    ].join("\n");
 
-    writeFileSync(join(commitmentDir, "Prover.toml"), commitmentProverToml, "utf8");
-    console.log("[auspex] commitment/Prover.toml written");
+    try {
+      // -----------------------------------------------------------------------
+      // Step 1: Derive commitment via the commitment helper circuit.
+      // -----------------------------------------------------------------------
+      const commitmentProverToml = [
+        `amounts = ${arr(amounts)}`,
+        `counterparty_ids = ${arr(cpIds)}`,
+        `is_liquid = ${arr(isLiquid)}`,
+        `active = ${arr(active)}`,
+        `liabilities = "${book.liabilities}"`,
+        `salt = "${salt}"`,
+      ].join("\n");
 
-    // Compile the commitment circuit (idempotent if already compiled, but force
-    // recompile to guard against stale artifacts from a different Prover.toml).
-    execFileSync(NARGO, ["compile"], {
-      cwd: commitmentDir,
-      stdio: "inherit",
-    });
+      writeFileSync(commitmentProverTomlPath, commitmentProverToml, "utf8");
+      console.log("[auspex] commitment/Prover.toml written");
 
-    // Execute and capture stdout (println output appears there).
-    const executeOut = execFileSync(NARGO, ["execute"], {
-      cwd: commitmentDir,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "inherit"],
-    });
+      // Compile the commitment circuit (idempotent if already compiled, but force
+      // recompile to guard against stale artifacts from a different Prover.toml).
+      execFileSync(NARGO, ["compile"], {
+        cwd: commitmentDir,
+        stdio: "inherit",
+      });
 
-    // Parse the Field value from nargo's println output.
-    // nargo prints hex (0x...) or decimal numbers; we look for either.
-    const commitment = parseNargoField(executeOut);
-    if (commitment === null) {
-      throw new Error(
-        `[auspex] could not parse commitment from nargo output:\n${executeOut}`,
-      );
+      // Execute and capture stdout (println output appears there).
+      const executeOut = execFileSync(NARGO, ["execute"], {
+        cwd: commitmentDir,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "inherit"],
+      });
+
+      // Parse the Field value from nargo's println output.
+      // nargo prints hex (0x...) or decimal numbers; we look for either.
+      const commitment = parseNargoField(executeOut);
+      if (commitment === null) {
+        throw new Error(
+          `[auspex] could not parse commitment from nargo output:\n${executeOut}`,
+        );
+      }
+      console.log(`[auspex] commitment: ${commitment}`);
+
+      // -----------------------------------------------------------------------
+      // Step 2: Write solvency/Prover.toml combining all witness fields.
+      // -----------------------------------------------------------------------
+      const solvencyProverToml = [
+        `amounts = ${arr(amounts)}`,
+        `counterparty_ids = ${arr(cpIds)}`,
+        `is_liquid = ${arr(isLiquid)}`,
+        `active = ${arr(active)}`,
+        `liabilities = "${book.liabilities}"`,
+        `salt = "${salt}"`,
+        `commitment = "${commitment}"`,
+        `buffer_bps = "${policy.bufferBps}"`,
+        `max_concentration_bps = "${policy.maxConcentrationBps}"`,
+        `min_liquidity_bps = "${policy.minLiquidityBps}"`,
+      ].join("\n");
+
+      writeFileSync(solvencyProverTomlPath, solvencyProverToml, "utf8");
+      console.log("[auspex] solvency/Prover.toml written");
+
+      // -----------------------------------------------------------------------
+      // Step 3: Build the solvency circuit (compile + witness + prove + vk).
+      // A book that breaks the policy makes the circuit unsatisfiable, so witness
+      // generation aborts here — this is the load-bearing property. Translate the
+      // raw subprocess failure into a clear, on-purpose message rather than
+      // letting an execFileSync stack trace escape.
+      // -----------------------------------------------------------------------
+      console.log("[auspex] running: just build-circuits solvency ...");
+      try {
+        execFileSync("just", ["build-circuits", "solvency"], {
+          cwd: REPO_ROOT,
+          stdio: "inherit",
+        });
+      } catch {
+        throw new Error(
+          "proof generation FAILED — the circuit is unsatisfiable for this book and policy.\n" +
+            "  The book breaks a solvency, concentration, or liquidity limit, so no valid\n" +
+            "  proof exists: you cannot attest a policy you do not satisfy.\n" +
+            "  (If nargo/bb are not installed, install the toolchain and retry.)",
+        );
+      }
+
+      // -----------------------------------------------------------------------
+      // Step 4: Self-check — verify the first public input matches our commitment.
+      // -----------------------------------------------------------------------
+      const publicInputsPath = join(solvencyDir, "target", "public_inputs");
+      const publicInputsBuf = readFileSync(publicInputsPath);
+      if (publicInputsBuf.length < 32) {
+        throw new Error(
+          `[auspex] public_inputs too short: ${publicInputsBuf.length} bytes`,
+        );
+      }
+      // First 32 bytes = first public input (commitment field), big-endian.
+      const onChainCommitment = "0x" + publicInputsBuf.subarray(0, 32).toString("hex");
+
+      const commitmentBigInt = normalizeToBigInt(commitment);
+      const onChainBigInt = normalizeToBigInt(onChainCommitment);
+
+      if (commitmentBigInt !== onChainBigInt) {
+        throw new Error(
+          `[auspex] SELF-CHECK FAILED — commitment mismatch!\n` +
+            `  derived:  ${commitment}\n` +
+            `  on-chain: ${onChainCommitment}`,
+        );
+      }
+      console.log("[auspex] self-check passed: commitment matches public_inputs[0]");
+
+      // -----------------------------------------------------------------------
+      // Step 5: Report artifacts.
+      // -----------------------------------------------------------------------
+      const targetDir = join(solvencyDir, "target");
+      const proofSize = readFileSync(join(targetDir, "proof")).length;
+      const vkSize = readFileSync(join(targetDir, "vk")).length;
+      const piSize = readFileSync(join(targetDir, "public_inputs")).length;
+
+      console.log("\n[auspex] proof generation complete:");
+      console.log(`  commitment:    ${commitment}`);
+      console.log(`  proof:         ${targetDir}/proof (${proofSize} bytes)`);
+      console.log(`  vk:            ${targetDir}/vk (${vkSize} bytes)`);
+      console.log(`  public_inputs: ${targetDir}/public_inputs (${piSize} bytes)`);
+      console.log("\n  Ready to publish with: auspex publish --proof circuits/solvency/target");
+    } finally {
+      // -----------------------------------------------------------------------
+      // Scrub the private witness from disk — always, even if proving failed.
+      // Prover.toml carries every position amount, counterparty, the liabilities
+      // total, and the hiding salt (audit: High — must not persist). Solvency is
+      // restored to its labeled synthetic example so the repo stays buildable
+      // (matching scripts/demo_cheat.sh's self-restore); the commitment circuit
+      // has no example, so its witness is removed (regenerated on the next run).
+      // -----------------------------------------------------------------------
+      try {
+        copyFileSync(solvencyProverTomlExample, solvencyProverTomlPath);
+        rmSync(commitmentProverTomlPath, { force: true });
+        console.log("[auspex] witness scrubbed from disk");
+      } catch (cleanupErr) {
+        console.error(
+          `[auspex] warning: failed to scrub witness Prover.toml: ${(cleanupErr as Error).message}`,
+        );
+      }
     }
-    console.log(`[auspex] commitment: ${commitment}`);
-
-    // -------------------------------------------------------------------------
-    // Step 2: Write solvency/Prover.toml combining all witness fields.
-    // -------------------------------------------------------------------------
-    const solvencyDir = join(REPO_ROOT, "circuits", "solvency");
-    const solvencyProverToml = [
-      `amounts = ${arr(amounts)}`,
-      `counterparty_ids = ${arr(cpIds)}`,
-      `is_liquid = ${arr(isLiquid)}`,
-      `active = ${arr(active)}`,
-      `liabilities = "${book.liabilities}"`,
-      `salt = "${salt}"`,
-      `commitment = "${commitment}"`,
-      `buffer_bps = "${policy.bufferBps}"`,
-      `max_concentration_bps = "${policy.maxConcentrationBps}"`,
-      `min_liquidity_bps = "${policy.minLiquidityBps}"`,
-    ].join("\n");
-
-    writeFileSync(join(solvencyDir, "Prover.toml"), solvencyProverToml, "utf8");
-    console.log("[auspex] solvency/Prover.toml written");
-
-    // -------------------------------------------------------------------------
-    // Step 3: Build the solvency circuit (compile + witness + prove + vk).
-    // -------------------------------------------------------------------------
-    console.log("[auspex] running: just build-circuits solvency ...");
-    execFileSync("just", ["build-circuits", "solvency"], {
-      cwd: REPO_ROOT,
-      stdio: "inherit",
-    });
-
-    // -------------------------------------------------------------------------
-    // Step 4: Self-check — verify the first public input matches our commitment.
-    // -------------------------------------------------------------------------
-    const publicInputsPath = join(solvencyDir, "target", "public_inputs");
-    const publicInputsBuf = readFileSync(publicInputsPath);
-    if (publicInputsBuf.length < 32) {
-      throw new Error(
-        `[auspex] public_inputs too short: ${publicInputsBuf.length} bytes`,
-      );
-    }
-    // First 32 bytes = first public input (commitment field), big-endian.
-    const onChainCommitment = "0x" + publicInputsBuf.subarray(0, 32).toString("hex");
-
-    const commitmentBigInt = normalizeToBigInt(commitment);
-    const onChainBigInt = normalizeToBigInt(onChainCommitment);
-
-    if (commitmentBigInt !== onChainBigInt) {
-      throw new Error(
-        `[auspex] SELF-CHECK FAILED — commitment mismatch!\n` +
-          `  derived:  ${commitment}\n` +
-          `  on-chain: ${onChainCommitment}`,
-      );
-    }
-    console.log("[auspex] self-check passed: commitment matches public_inputs[0]");
-
-    // -------------------------------------------------------------------------
-    // Step 5: Report artifacts.
-    // -------------------------------------------------------------------------
-    const targetDir = join(solvencyDir, "target");
-    const proofSize = readFileSync(join(targetDir, "proof")).length;
-    const vkSize = readFileSync(join(targetDir, "vk")).length;
-    const piSize = readFileSync(join(targetDir, "public_inputs")).length;
-
-    console.log("\n[auspex] proof generation complete:");
-    console.log(`  commitment:    ${commitment}`);
-    console.log(`  proof:         ${targetDir}/proof (${proofSize} bytes)`);
-    console.log(`  vk:            ${targetDir}/vk (${vkSize} bytes)`);
-    console.log(`  public_inputs: ${targetDir}/public_inputs (${piSize} bytes)`);
-    console.log("\n  Ready to publish with: auspex publish --proof circuits/solvency/target");
   });
 
 program
@@ -230,5 +275,10 @@ program
     }
   });
 
-program.parseAsync();
+program.parseAsync().catch((err: unknown) => {
+  // Print a clean, branded one-liner instead of an unhandled-rejection stack
+  // dump (keeps the cheat-attempt demo readable and errors actionable).
+  console.error(`[auspex] ${err instanceof Error ? err.message : String(err)}`);
+  process.exit(1);
+});
 

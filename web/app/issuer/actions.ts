@@ -1,6 +1,6 @@
 "use server";
 
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { runNode } from "./run-cli";
@@ -34,6 +34,35 @@ function cliPath(): string {
 
 function proofDirPath(): string {
   return path.join(process.cwd(), "..", "circuits", "solvency", "target");
+}
+
+/* ─── Prover serialization ───────────────────────────────────────────────────
+ * The CLI proves against a SHARED circuit working tree
+ * (circuits/{commitment,solvency}/Prover.toml + target/). Two concurrent
+ * requests would clobber each other's witness between write and read, producing
+ * a proof over the wrong book — a correctness failure of the core ZK property.
+ * Serialize the prove→publish critical section across every request handled by
+ * this server instance. (Production hardening: give each request its own circuit
+ * working dir instead of serializing; tracked as future work.)
+ * ───────────────────────────────────────────────────────────────────────── */
+
+let proverLock: Promise<void> = Promise.resolve();
+
+/**
+ * Acquire the prover lock. Resolves once any in-flight prove→publish has
+ * finished, and returns a release fn the caller MUST invoke (in a `finally`)
+ * so the next queued request can proceed. Chains past failures so one errored
+ * request never wedges the queue.
+ */
+async function acquireProverLock(): Promise<() => void> {
+  let release!: () => void;
+  const next = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const previous = proverLock;
+  proverLock = previous.then(() => next);
+  await previous;
+  return release;
 }
 
 /* ─── generateAndPublish ─────────────────────────────────────────────────── */
@@ -134,6 +163,7 @@ export async function generateAndPublish(
   // own cwd, so absolute paths are required for correctness.
 
   let tmpDir: string | null = null;
+  let releaseLock: (() => void) | null = null;
 
   try {
     tmpDir = mkdtempSync(path.join(os.tmpdir(), "auspex-"));
@@ -149,25 +179,28 @@ export async function generateAndPublish(
     const policy = { bufferBps, maxConcentrationBps, minLiquidityBps };
     writeFileSync(policyTmp, JSON.stringify(policy), "utf8");
 
+    // Serialize from here on: prove + publish both operate on the shared
+    // circuit working tree, so only one request may hold it at a time.
+    releaseLock = await acquireProverLock();
+
     // ── 4. Run prove ─────────────────────────────────────────────────────
 
-    let proveStdout: string;
     try {
-      proveStdout = runNode(cli, [
-        "prove",
-        "--book",
-        bookTmp,
-        "--policy",
-        policyTmp,
-      ]);
+      runNode(cli, ["prove", "--book", bookTmp, "--policy", policyTmp]);
     } catch (err) {
       // Non-zero exit = constraint violation (unsatisfiable book) or missing
-      // toolchain. Either way: no proof exists. Log server-side only, bounded —
-      // the error message can carry captured subprocess stdout/stderr.
-      console.error(
-        "[auspex:issuer] prove failed:",
-        (err as Error).message.slice(0, 200),
-      );
+      // toolchain; ETIMEDOUT = the prover exceeded its ceiling. Log server-side
+      // only, bounded — the message can carry captured subprocess output.
+      const e = err as NodeJS.ErrnoException;
+      console.error("[auspex:issuer] prove failed:", e.message.slice(0, 200));
+      if (e.code === "ETIMEDOUT") {
+        return {
+          ok: false,
+          error:
+            "Proof generation timed out before it finished. The prover may be " +
+            "overloaded — please try again.",
+        };
+      }
       return {
         ok: false,
         error:
@@ -176,19 +209,30 @@ export async function generateAndPublish(
       };
     }
 
-    // Parse commitment from prove stdout: "[auspex] commitment: 0x..."
-    const commitmentMatch = proveStdout.match(
-      /\[auspex\]\s+commitment:\s+(0x[0-9a-fA-F]+)/,
-    );
-    let commitment = "";
-    if (commitmentMatch) {
-      commitment = commitmentMatch[1];
-    } else {
-      // Proof succeeded but we couldn't read the commitment — warn server-side.
-      // The attestation still exists on-chain, so we proceed to publish/report.
-      console.warn(
-        "[auspex:issuer] commitment not parsed from prove output",
+    // Derive the displayed commitment from the proof artifact itself — the first
+    // 32 bytes of public_inputs, big-endian — instead of scraping prove's
+    // stdout. This is the exact value publish writes on-chain, so the seal shown
+    // to the issuer always matches the attestation, and a change in CLI log
+    // formatting can never render a zeroed seal (audit: Medium). Reading the
+    // shared target/ here is safe: the prover lock is held through publish.
+    let commitment: string;
+    try {
+      const publicInputs = readFileSync(path.join(proofDir, "public_inputs"));
+      if (publicInputs.length < 32) {
+        throw new Error(`public_inputs too short: ${publicInputs.length} bytes`);
+      }
+      commitment = "0x" + publicInputs.subarray(0, 32).toString("hex");
+    } catch (err) {
+      console.error(
+        "[auspex:issuer] could not read commitment from public_inputs:",
+        (err as Error).message.slice(0, 200),
       );
+      return {
+        ok: false,
+        error:
+          "The proof was generated but its commitment could not be read. " +
+          "Check the server logs.",
+      };
     }
 
     // ── 5. Guard AUSPEX_SECRET ────────────────────────────────────────────
@@ -260,6 +304,11 @@ export async function generateAndPublish(
       minLiquidityBps,
     };
   } finally {
+    // Release the prover lock first so the next queued request can proceed.
+    if (releaseLock) {
+      releaseLock();
+    }
+
     // ── 7. Clean up temp dir — always, regardless of outcome ─────────────
     if (tmpDir) {
       try {
