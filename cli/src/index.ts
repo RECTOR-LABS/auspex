@@ -133,12 +133,25 @@ program
 
       // -----------------------------------------------------------------------
       // Step 3: Build the solvency circuit (compile + witness + prove + vk).
+      // A book that breaks the policy makes the circuit unsatisfiable, so witness
+      // generation aborts here — this is the load-bearing property. Translate the
+      // raw subprocess failure into a clear, on-purpose message rather than
+      // letting an execFileSync stack trace escape.
       // -----------------------------------------------------------------------
       console.log("[auspex] running: just build-circuits solvency ...");
-      execFileSync("just", ["build-circuits", "solvency"], {
-        cwd: REPO_ROOT,
-        stdio: "inherit",
-      });
+      try {
+        execFileSync("just", ["build-circuits", "solvency"], {
+          cwd: REPO_ROOT,
+          stdio: "inherit",
+        });
+      } catch {
+        throw new Error(
+          "proof generation FAILED — the circuit is unsatisfiable for this book and policy.\n" +
+            "  The book breaks a solvency, concentration, or liquidity limit, so no valid\n" +
+            "  proof exists: you cannot attest a policy you do not satisfy.\n" +
+            "  (If nargo/bb are not installed, install the toolchain and retry.)",
+        );
+      }
 
       // -----------------------------------------------------------------------
       // Step 4: Self-check — verify the first public input matches our commitment.
@@ -262,5 +275,10 @@ program
     }
   });
 
-program.parseAsync();
+program.parseAsync().catch((err: unknown) => {
+  // Print a clean, branded one-liner instead of an unhandled-rejection stack
+  // dump (keeps the cheat-attempt demo readable and errors actionable).
+  console.error(`[auspex] ${err instanceof Error ? err.message : String(err)}`);
+  process.exit(1);
+});
 
