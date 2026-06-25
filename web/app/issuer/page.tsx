@@ -1,5 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { TerminalSquare, ArrowRight } from "lucide-react";
+import Link from "next/link";
 import IssuerForm from "./IssuerForm";
 
 /* ─── Metadata ───────────────────────────────────────────────────────────── */
@@ -53,8 +55,68 @@ export default function IssuerPage() {
         </p>
       </header>
 
-      {/* ── Form + result ─────────────────────────────────────────────────── */}
-      <IssuerForm prefillBook={prefillBook} />
+      {/* ── Form (local) or read-only notice (hosted demo) ────────────────── */}
+      {process.env.AUSPEX_READONLY ? (
+        <ReadOnlyNotice />
+      ) : (
+        <IssuerForm prefillBook={prefillBook} />
+      )}
+    </div>
+  );
+}
+
+/* ─── ReadOnlyNotice ──────────────────────────────────────────────────────── */
+
+/**
+ * Shown on the hosted (read-only) demo where the proving toolchain (nargo + bb)
+ * isn't available. Proving runs locally; verification stays fully live.
+ */
+function ReadOnlyNotice() {
+  const link =
+    "inline-flex items-center gap-1.5 font-body text-sm text-verdigris " +
+    "underline-offset-4 hover:underline focus-visible:outline-2 " +
+    "focus-visible:outline-verdigris focus-visible:outline-offset-2 rounded-sm";
+
+  return (
+    <div className="rounded-xl border border-line bg-slate p-6 sm:p-8">
+      <div className="flex items-start gap-3">
+        <TerminalSquare
+          size={22}
+          strokeWidth={1.75}
+          className="mt-0.5 flex-shrink-0 text-verdigris"
+          aria-hidden="true"
+        />
+        <div className="space-y-3">
+          <h2 className="font-display text-xl font-[700] text-bone">
+            Proving runs locally
+          </h2>
+          <p className="font-body text-sm text-muted leading-relaxed">
+            Generating a proof runs the Noir/Barretenberg toolchain (nargo + bb) —
+            heavy native cryptography that isn&rsquo;t available on this hosted
+            demo. Issue an attestation by running the CLI locally (see the repo),
+            or watch it in the demo video. Verification stays fully live here.
+          </p>
+          <div className="flex flex-wrap gap-x-6 gap-y-2 pt-1">
+            <Link href="/verify" className={link}>
+              Verify an issuer
+              <ArrowRight size={14} aria-hidden="true" />
+            </Link>
+            <Link href="/heartbeat" className={link}>
+              Trace a solvency heartbeat
+              <ArrowRight size={14} aria-hidden="true" />
+            </Link>
+            <a
+              href="https://github.com/RECTOR-LABS/auspex"
+              target="_blank"
+              rel="noopener noreferrer"
+              className={link}
+            >
+              View the repo
+              <ArrowRight size={14} aria-hidden="true" />
+            </a>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

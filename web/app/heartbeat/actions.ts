@@ -26,6 +26,10 @@ const MAX_POINTS = 50;
  * module-load time. process.cwd() = web/ when Next runs from the web directory.
  */
 function contractId(): string {
+  // On Vercel the gitignored .auspex_contract_id isn't in the repo, so prefer an
+  // env var; fall back to the file for local dev. The contract id is public.
+  const fromEnv = process.env.AUSPEX_CONTRACT_ID?.trim();
+  if (fromEnv) return fromEnv;
   return readFileSync(
     path.join(process.cwd(), "..", ".auspex_contract_id"),
     "utf8",
