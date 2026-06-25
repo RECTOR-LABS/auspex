@@ -85,6 +85,15 @@ export async function generateAndPublish(
   _prevState: ActionResult | null,
   formData: FormData,
 ): Promise<ActionResult> {
+  // ── 0. Read-only deployments have no prover toolchain ───────────────────
+  if (process.env.AUSPEX_READONLY) {
+    return {
+      ok: false,
+      error:
+        "Proving is disabled on this hosted demo — run the CLI locally to issue an attestation.",
+    };
+  }
+
   // ── 1. Parse + validate inputs ──────────────────────────────────────────
 
   const bookRaw = formData.get("book");
